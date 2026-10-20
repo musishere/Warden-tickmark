@@ -76,7 +76,10 @@ engagements = Table(
     Column("tenant_id", UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False),
     Column("client_name", Text, nullable=False),
     _now("created_at"),
+    Column("period_start", Date),  # the audit period (Warden's); invoice dates are checked against it
+    Column("period_end", Date),
     UniqueConstraint("tenant_id", "id", name="engagements_scoped_key"),
+    CheckConstraint("period_end >= period_start", name="engagements_period_order"),
 )
 
 documents = Table(
@@ -107,6 +110,7 @@ extractions = Table(
     Column("raw", JSONB, nullable=False),  # exactly what the extractor returned
     Column("fields", JSONB, nullable=False),  # parsed: name -> {value, confidence, snip}
     _now("created_at"),
+    Column("line_items", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
     _scoped_key("extractions"),
     _link("extractions", "document_id", "documents"),
     UniqueConstraint("document_id", "extractor", "model_id", "raw_sha256", name="extractions_once"),
@@ -220,7 +224,28 @@ reviews = Table(
                     name="reviews_choice_has_document"),
 )
 
+verdicts = Table(
+    "verdicts", metadata,
+    _id(),
+    *_scope("verdicts"),
+    Column("run_id", UUID(as_uuid=True), nullable=False),
+    Column("match_result_id", UUID(as_uuid=True), nullable=False, unique=True),
+    Column("verdict", Text, nullable=False),  # matched | difference | needs_review | no_evidence
+    Column("document_id", UUID(as_uuid=True)),  # the PDF the claim was checked against
+    Column("agreements", JSONB, nullable=False),  # each claimed field vs the PDF
+    Column("checks", JSONB, nullable=False),  # the invoice's own checks
+    Column("reasons", JSONB, nullable=False),
+    Column("steps", JSONB, nullable=False),
+    _link("verdicts", "run_id", "runs"),
+    _link("verdicts", "match_result_id", "match_results"),
+    _link("verdicts", "document_id", "documents"),
+    CheckConstraint("verdict in ('matched', 'difference', 'needs_review', 'no_evidence')", name="verdicts_verdict"),
+    CheckConstraint("(verdict in ('matched', 'difference')) = (document_id is not null)",
+                    name="verdicts_checked_has_document"),
+)
+
 Index("match_results_run", match_results.c.run_id)
+Index("verdicts_run", verdicts.c.run_id)
 Index("sample_rows_run", sample_rows.c.run_id)
 Index("sample_issues_run", sample_issues.c.run_id)
 Index("reviews_result", reviews.c.match_result_id, reviews.c.decided_at)
@@ -229,4 +254,4 @@ Index("engagements_tenant", engagements.c.tenant_id)
 
 REGISTRY_TABLES = ["tenants", "engagements"]
 AUDIT_TABLES = ["documents", "extractions", "runs", "run_documents", "sample_rows", "sample_issues",
-                "match_results", "reviews"]
+                "match_results", "reviews", "verdicts"]

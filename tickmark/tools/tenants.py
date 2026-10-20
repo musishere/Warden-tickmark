@@ -1,7 +1,8 @@
 """Register audit firms (tenants) and their client engagements. Uses the owner database role.
 
     python -m tools.tenants add-tenant "Firm A" [--entra-tenant-id <tid>] [--id <warden uuid>]
-    python -m tools.tenants add-engagement <tenant id> "Coke" [--id <warden uuid>]
+    python -m tools.tenants add-engagement <tenant id> "Coke" [--id <warden uuid>] [--period 2026-01-01:2026-12-31]
+    python -m tools.tenants set-period <engagement id> 2026-01-01:2026-12-31
     python -m tools.tenants list
 
 Warden is the source of truth; pass its ids with --id so both systems agree.
@@ -9,7 +10,8 @@ Warden is the source of truth; pass its ids with --id so both systems agree.
 import argparse
 from itertools import groupby
 
-from tickmark.store.provision import add_engagement, add_tenant, list_tenants
+from tickmark.store.provision import add_engagement, add_tenant, list_tenants, set_period
+from tickmark.vouch import parse_period
 
 
 def main() -> None:
@@ -23,13 +25,21 @@ def main() -> None:
     e.add_argument("tenant_id")
     e.add_argument("client_name")
     e.add_argument("--id")
+    e.add_argument("--period", help="audit period YYYY-MM-DD:YYYY-MM-DD")
+    sp = sub.add_parser("set-period")
+    sp.add_argument("engagement_id")
+    sp.add_argument("period", help="YYYY-MM-DD:YYYY-MM-DD")
     sub.add_parser("list")
     args = ap.parse_args()
 
     if args.cmd == "add-tenant":
         print(add_tenant(args.name, args.entra_tenant_id, args.id))
     elif args.cmd == "add-engagement":
-        print(add_engagement(args.tenant_id, args.client_name, args.id))
+        print(add_engagement(args.tenant_id, args.client_name, args.id,
+                             parse_period(args.period) if args.period else None))
+    elif args.cmd == "set-period":
+        set_period(args.engagement_id, parse_period(args.period))
+        print(f"engagement {args.engagement_id}: audit period {args.period}")
     else:
         rows = list_tenants()
         if not rows:
@@ -38,7 +48,8 @@ def main() -> None:
             print(f"{name}  tenant {tid}" + (f"  (entra {entra})" if entra else ""))
             for r in group:
                 if r["engagement_id"]:
-                    print(f"    {r['client_name']:<20} engagement {r['engagement_id']}")
+                    period = f"  period {r['period_start']} … {r['period_end']}" if r["period_start"] else "  (no period)"
+                    print(f"    {r['client_name']:<20} engagement {r['engagement_id']}{period}")
 
 
 if __name__ == "__main__":

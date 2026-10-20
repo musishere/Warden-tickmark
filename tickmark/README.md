@@ -15,6 +15,7 @@ src/tickmark/          the application (the only code that ships)
   checks/              deterministic pass/fail checks
   extract/             read invoice PDFs (Azure Document Intelligence; labels for tests)
   match/               which PDF each row is about (identify.py)
+  vouch/               does that PDF back the row's claim: ✅ / ⚠️ / 👀 / ❓
   store/               append-only audit trail in Postgres + evidence store
   pipeline.py models.py config.py warden_client.py
 tools/                 developer tooling, not shipped
@@ -24,6 +25,8 @@ tools/                 developer tooling, not shipped
   verify_clean.py      prove cleaning lost no rows and changed no values
   identify_sample.py   row -> PDF, with --trace, --out workbook, --save to the audit DB
   eval_identify.py     wrong links (must be 0), per dataset
+  vouch_sample.py      row -> PDF -> verdict, with --trace, --out workbook, --save
+  eval_vouch.py        verdicts vs labels, defects found per check (false ✅ must be 0)
   show_run.py review.py verify_run.py   read a stored run, add a human review, verify evidence
   tenants.py           register audit firms (tenants) and client engagements
 migrations/            Alembic: audit tables, append-only triggers, multi-tenant row-level security
@@ -68,17 +71,26 @@ python -m tools.identify_sample data/external/tickmark-sample/sample.xlsx \
 ```
 Azure results are cached in `data/cache/docint/` (one call per PDF, ever).
 
+## Does the PDF back the row's claim?
+`tickmark.vouch` compares the row's vendor, amount, date and invoice number with its linked PDF and
+runs the invoice's own checks (totals, lines, VAT rate, audit period, duplicates). Any difference
+over 0.01 is ⚠️; anything that cannot be verified is 👀, never ✅. See [docs/PROGRESS.md](docs/PROGRESS.md) §8.
+```bash
+python -m tools.vouch_sample SAMPLE.xlsx INVOICE_DIR --period 2026-01-01:2026-12-31 --trace --out data/output/vouched.xlsx
+python -m tools.eval_vouch --labels
+```
+
 ## Audit trail (multi-tenant)
 `--save` stores a run in Postgres (append-only): the files by hash, what was read, every row,
 every result with its full trace, and human reviews. Every row belongs to one **audit firm
 (tenant)** and one **client engagement**; Postgres row-level security keeps them apart, and the
-app connects as `tickmark_app` (read + append only). See [docs/PROGRESS.md](docs/PROGRESS.md) §8.
+app connects as `tickmark_app` (read + append only). See [docs/PROGRESS.md](docs/PROGRESS.md) §9.
 ```bash
 python -m tools.tenants add-tenant "Firm A"              # prints the tenant id
-python -m tools.tenants add-engagement <tenant id> "Coke" # prints the engagement id
+python -m tools.tenants add-engagement <tenant id> "Coke" --period 2026-01-01:2026-12-31
 export TICKMARK_TENANT=<tenant id> TICKMARK_ENGAGEMENT=<engagement id>
 
-python -m tools.identify_sample SAMPLE.xlsx INVOICE_DIR --save
+python -m tools.vouch_sample SAMPLE.xlsx INVOICE_DIR --save
 python -m tools.show_run RUN_ID --trace --out data/output/run.xlsx
 python -m tools.review RUN_ID S-02 --decision accept
 python -m tools.verify_run RUN_ID

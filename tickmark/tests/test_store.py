@@ -2,7 +2,7 @@
 Fixtures (throw-away database, firms and engagements) are in conftest.py."""
 import shutil
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -10,19 +10,23 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from tickmark.extract import LabelExtractor
-from tickmark.pipeline import run_identification
+from tickmark.pipeline import run_vouch
 from tickmark.store import add_review, get_run, save_failed_run, save_run, scoped, verify_run
 from tickmark.store.schema import AUDIT_TABLES, documents, run_documents, runs, sample_rows
+from tickmark.vouch import VouchPolicy
 
 pytestmark = pytest.mark.db
 ROOT = Path(__file__).resolve().parents[1]
 GEN, EXT = ROOT / "data/generated", ROOT / "data/external/tickmark-sample"
+PERIOD = {GEN: (date(2025, 1, 1), date(2025, 12, 31)), EXT: (date(2026, 1, 1), date(2026, 12, 31))}
 
 
 def _run(sample=GEN / "sample.xlsx", invoices=GEN / "invoices", labels=GEN / "labels"):
     if not Path(sample).exists():
         pytest.skip(f"{sample} missing")
-    return run_identification(Path(sample), Path(invoices), LabelExtractor(Path(labels)))
+    start, end = PERIOD[Path(sample).parent]
+    return run_vouch(Path(sample), Path(invoices), LabelExtractor(Path(labels)),
+                     VouchPolicy(period_start=start, period_end=end))
 
 
 def _save(t, run, ctx=None):
@@ -35,6 +39,9 @@ def test_run_is_stored_completely_and_reads_back_identically(tenancy):
     run_id = _save(t, run)
     stored = get_run(t.coke, run_id, t.app)
     assert stored.results == run.results  # status, files, evidence, candidates, comparisons, steps
+    assert stored.verdicts == run.verdicts and len(stored.verdicts) == 16  # agreements, checks, reasons, steps
+    assert [e.line_items for e in stored.extracted] == [e.line_items for e in run.extracted]
+    assert stored.run["thresholds"]["vouch"]["period_start"] == "2025-01-01"
     assert len(stored.files) == 20 and len(stored.results) == 16 and stored.issues == []
     assert [e.fields for e in stored.extracted] == [e.fields for e in run.extracted]
     assert stored.run["status"] == "completed" and stored.run["run_by"] == "ali"

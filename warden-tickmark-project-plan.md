@@ -162,7 +162,7 @@ links, files are de-duplicated per engagement only, and the app role can only SE
 
 | Table | Key columns |
 |---|---|
-| `tenants` / `engagements` | registry of Warden's ids (firm; client per firm), written by the owner role only |
+| `tenants` / `engagements` | registry of Warden's ids (firm; client per firm + audit period), written by the owner role only |
 | `documents` | id, sha256 (UNIQUE per engagement), kind (pdf / sample), size_bytes, pages, storage_path |
 | `extractions` | document_id, extractor, model_id, raw (JSONB), fields: `{ name: { value, confidence, snip: { page, bbox, text } } }` |
 | `runs` | id, engagement_id (Warden's), run_by, started_at, status, matcher_version, thresholds |
@@ -170,6 +170,7 @@ links, files are de-duplicated per engagement only, and the app role can only SE
 | `sample_rows` / `sample_issues` | run_id, row_id, excel_row, values, raw_cells / reason |
 | `match_results` | run_id, sample_row_id, status, document_id, evidence, candidates, comparisons, steps |
 | `reviews` | match_result_id, reviewer, decision, chosen_document_id, note, decided_at |
+| `verdicts` | match_result_id, verdict (matched / difference / needs_review / no_evidence), document_id, agreements, checks, reasons, steps |
 
 ## API sketch
 

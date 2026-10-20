@@ -26,6 +26,7 @@ from tickmark.store.schema import (
     runs,
     sample_issues,
     sample_rows,
+    verdicts,
 )
 
 
@@ -85,7 +86,8 @@ def _extraction(conn: Connection, ctx: TenantContext, document_id: UUID, inv: Ex
     raw = inv.raw if inv.raw is not None else {}
     values = {**_scope(ctx), "document_id": document_id, "extractor": inv.extractor or "unknown",
               "model_id": inv.model_id, "api_version": inv.api_version, "raw_sha256": canonical_sha256(raw),
-              "raw": raw, "fields": {k: f.model_dump(mode="json") for k, f in inv.fields.items()}}
+              "raw": raw, "fields": {k: f.model_dump(mode="json") for k, f in inv.fields.items()},
+              "line_items": [li.model_dump(mode="json") for li in inv.line_items]}
     conn.execute(insert(extractions).values(**values).on_conflict_do_nothing(constraint="extractions_once"))
     return conn.execute(select(extractions.c.id).where(
         extractions.c.document_id == document_id, extractions.c.extractor == values["extractor"],
@@ -125,7 +127,8 @@ def save_run(run: IdentificationRun, ctx: TenantContext, *, started_at: datetime
         run_id = conn.execute(runs.insert().values(
             **scope, run_by=ctx.user, started_at=started_at,
             finished_at=datetime.now(UTC), status="completed", sample_document_id=sample_doc,
-            sheet=sheet, matcher_version=matcher_version(), thresholds=THRESHOLDS,
+            sheet=sheet, matcher_version=matcher_version(),
+            thresholds={**THRESHOLDS, "vouch": run.policy.model_dump(mode="json") if run.policy else None},
             extractor=",".join(sorted({inv.extractor for inv in run.extracted})) or "none",
             model_id=",".join(model_ids) or None,
         ).returning(runs.c.id)).scalar_one()
@@ -152,9 +155,18 @@ def save_run(run: IdentificationRun, ctx: TenantContext, *, started_at: datetime
             conn.execute(sample_issues.insert().values(**scope, run_id=run_id, excel_row=n, kind=kind, reason=reason,
                                                        raw_cells=raw.get(n, [])))
 
+        result_ids: dict[int, UUID] = {}
         for r in run.results:
-            conn.execute(match_results.insert().values(
-                **scope, **_result_values(r, run_id, row_ids[r.excel_row], doc_ids)))
+            result_ids[r.excel_row] = conn.execute(match_results.insert().values(
+                **scope, **_result_values(r, run_id, row_ids[r.excel_row], doc_ids)
+            ).returning(match_results.c.id)).scalar_one()
+
+        for v in run.verdicts:
+            conn.execute(verdicts.insert().values(
+                **scope, run_id=run_id, match_result_id=result_ids[v.excel_row], verdict=v.verdict,
+                document_id=doc_ids[v.invoice_file] if v.invoice_file else None,
+                agreements=[a.model_dump(mode="json") for a in v.agreements],
+                checks=[c.model_dump(mode="json") for c in v.checks], reasons=v.reasons, steps=v.steps))
     return run_id
 
 

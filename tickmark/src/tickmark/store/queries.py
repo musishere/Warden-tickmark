@@ -7,15 +7,20 @@ from sqlalchemy import Engine, select
 
 from tickmark.models import (
     Candidate,
+    CheckResult,
     Comparison,
     ExtractedField,
     ExtractedInvoice,
+    ExtractedLineItem,
+    FieldAgreement,
     Identification,
     Snip,
+    Verdict,
 )
 from tickmark.store.context import TenantContext, scoped
 from tickmark.store.schema import (
     documents,
+    engagements,
     extractions,
     match_results,
     reviews,
@@ -23,6 +28,7 @@ from tickmark.store.schema import (
     runs,
     sample_issues,
     sample_rows,
+    verdicts,
 )
 
 DECISIONS = ("accept", "choose_candidate", "reject", "requested_from_client")
@@ -46,6 +52,7 @@ class StoredRun:
     results: list[Identification]
     issues: list[dict]
     reviews: dict[str, list[Review]] = field(default_factory=dict)  # by row_id, oldest first
+    verdicts: list[Verdict] = field(default_factory=list)  # one per result, if the run vouched the claims
 
 
 def _run_uuid(run_id: UUID | str) -> UUID:
@@ -71,7 +78,8 @@ def get_run(ctx: TenantContext, run_id: UUID | str, db: Engine | None = None) ->
                               ).mappings().one_or_none()
         files = [dict(r) for r in conn.execute(
             select(run_documents.c.file_name, run_documents.c.document_id, run_documents.c.extraction_id,
-                   documents.c.sha256, documents.c.storage_path, extractions.c.fields, extractions.c.extractor,
+                   documents.c.sha256, documents.c.storage_path, extractions.c.fields, extractions.c.line_items,
+                   extractions.c.extractor,
                    extractions.c.model_id, extractions.c.raw_sha256)
             .join(documents, documents.c.id == run_documents.c.document_id)
             .join(extractions, extractions.c.id == run_documents.c.extraction_id)
@@ -79,7 +87,8 @@ def get_run(ctx: TenantContext, run_id: UUID | str, db: Engine | None = None) ->
         name_of = {f["document_id"]: f["file_name"] for f in files}
         extracted = [ExtractedInvoice(
             file=f["file_name"], extractor=f["extractor"], model_id=f["model_id"],
-            fields={k: ExtractedField.model_validate(v) for k, v in f["fields"].items()}) for f in files]
+            fields={k: ExtractedField.model_validate(v) for k, v in f["fields"].items()},
+            line_items=[ExtractedLineItem.model_validate(li) for li in f["line_items"]]) for f in files]
 
         rows = conn.execute(
             select(match_results, sample_rows.c.row_id, sample_rows.c.excel_row)
@@ -96,6 +105,15 @@ def get_run(ctx: TenantContext, run_id: UUID | str, db: Engine | None = None) ->
             steps=r["steps"]) for r in rows]
         result_row = {r["id"]: r["row_id"] for r in rows}
 
+        name_by_result = {r["id"]: (r["row_id"], r["excel_row"]) for r in rows}
+        stored_verdicts = [Verdict(
+            row_id=name_by_result[v["match_result_id"]][0], excel_row=name_by_result[v["match_result_id"]][1],
+            verdict=v["verdict"], invoice_file=name_of.get(v["document_id"]),
+            agreements=[FieldAgreement.model_validate(a) for a in v["agreements"]],
+            checks=[CheckResult.model_validate(c) for c in v["checks"]], reasons=v["reasons"], steps=v["steps"])
+            for v in conn.execute(select(verdicts).where(verdicts.c.run_id == run_id)).mappings()]
+        stored_verdicts.sort(key=lambda v: v.excel_row)
+
         issues = [dict(r) for r in conn.execute(select(sample_issues).where(sample_issues.c.run_id == run_id)
                                                 .order_by(sample_issues.c.excel_row)).mappings()]
         by_row: dict[str, list[Review]] = {}
@@ -104,7 +122,16 @@ def get_run(ctx: TenantContext, run_id: UUID | str, db: Engine | None = None) ->
             by_row.setdefault(result_row[rv["match_result_id"]], []).append(Review(
                 rv["reviewer"], rv["decision"], name_of.get(rv["chosen_document_id"]), rv["note"],
                 rv["decided_at"]))
-    return StoredRun(dict(run), dict(sample) if sample else {}, files, extracted, results, issues, by_row)
+    return StoredRun(dict(run), dict(sample) if sample else {}, files, extracted, results, issues, by_row,
+                     stored_verdicts)
+
+
+def engagement_period(ctx: TenantContext, db: Engine | None = None) -> tuple:
+    """The audit period of ctx's engagement: (start, end), either may be None."""
+    with scoped(ctx, db) as conn:
+        row = conn.execute(select(engagements.c.period_start, engagements.c.period_end)
+                           .where(engagements.c.id == ctx.engagement_id)).one_or_none()
+    return (row.period_start, row.period_end) if row else (None, None)
 
 
 def add_review(ctx: TenantContext, run_id: UUID | str, row_id: str, *, decision: str,

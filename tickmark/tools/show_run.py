@@ -6,14 +6,15 @@
 A run of another firm or engagement is reported as "no run": its existence is not revealed.
 
 The output is the same as `tools.identify_sample --trace` at the time of the run, plus the human
-reviews. Workbook links open the stored evidence copies, so they show exactly what the run used.
+reviews and, if the run checked the claims, the verdicts. Workbook links open the stored evidence copies, so they show exactly what the run used.
 """
 import argparse
 from pathlib import Path
 
 from tickmark.store import get_run, list_runs
-from tools.identify_sample import print_results, write_workbook
+from tools.identify_sample import build_workbook, print_results, save_workbook
 from tools.tenant_args import add_tenant_args, tenant_context
+from tools.vouch_sample import add_verdict_sheets, print_verdicts
 
 
 def main() -> None:
@@ -50,9 +51,16 @@ def main() -> None:
         print(f"    Excel row {i['excel_row']}: {i['kind']}: {i['reason']}")
     print()
     print_results(s.results, s.extracted, args.trace, s.reviews)
+    if s.verdicts:
+        vouch = run["thresholds"].get("vouch") or {}
+        print(f"\n── Claims checked (audit period {vouch.get('period_start')} … {vouch.get('period_end')}) " + "─" * 30)
+        print_verdicts(s.verdicts, args.trace)
     if args.out:
-        write_workbook(args.out, s.results, s.extracted, {f["file_name"]: Path(f["storage_path"]) for f in s.files},
-                       s.reviews)
+        pdfs = {f["file_name"]: Path(f["storage_path"]) for f in s.files}
+        wb = build_workbook(s.results, s.extracted, pdfs, s.reviews)
+        if s.verdicts:
+            add_verdict_sheets(wb, s.verdicts, pdfs)
+        save_workbook(wb, args.out)
         print(f"wrote {args.out}")
 
 

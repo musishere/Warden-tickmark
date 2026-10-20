@@ -19,6 +19,7 @@ each row compared field by field with every PDF that agrees on anything, and the
   PDF fields   everything read from each PDF, confidence, trusted or why not, page + position
 """
 import argparse
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -77,15 +78,37 @@ def print_trace(r: Identification) -> None:
         print(f"      ({rest} other PDF(s) agree on no field; see the Comparisons sheet)")
 
 
-def write_workbook(out: Path, results: list[Identification], extracted: list[ExtractedInvoice],
-                   pdfs: Path | dict[str, Path], reviews: dict | None = None) -> None:
+def pdf_linker(pdfs: Path | dict[str, Path]) -> Callable:
     """pdfs: the invoice folder, or file name -> path (stored evidence copies when shown from the DB)."""
     def link(cell, file: str | None) -> None:
         path = (pdfs.get(file) if isinstance(pdfs, dict) else pdfs / file) if file else None
         if path:
             cell.hyperlink = Path(path).resolve().as_uri()
             cell.font = Font(color="0563C1", underline="single")
+    return link
 
+
+def style(sheet, widths: list[int]) -> None:
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+    for col, w in zip("ABCDEFGHIJKL", widths):
+        sheet.column_dimensions[col].width = w
+    sheet.freeze_panes = "A2"
+
+
+def save_workbook(wb: Workbook, out: Path) -> None:
+    out.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(out)
+
+
+def write_workbook(out: Path, results: list[Identification], extracted: list[ExtractedInvoice],
+                   pdfs: Path | dict[str, Path], reviews: dict | None = None) -> None:
+    save_workbook(build_workbook(results, extracted, pdfs, reviews), out)
+
+
+def build_workbook(results: list[Identification], extracted: list[ExtractedInvoice],
+                   pdfs: Path | dict[str, Path], reviews: dict | None = None) -> Workbook:
+    link = pdf_linker(pdfs)
     wb = Workbook()
     ws = wb.active
     ws.title = "Identified"
@@ -132,16 +155,10 @@ def write_workbook(out: Path, results: list[Identification], extracted: list[Ext
                 pf.cell(pf.max_row, 5).fill = PatternFill("solid", fgColor=FILL["untrusted"])
     pf.auto_filter.ref = pf.dimensions
 
-    widths = {ws: [10, 8, 14, 22, 70, 50, 50], steps: [8, 14, 4, 110], comp: [8, 22, 50, 8, 30, 30, 11, 40],
-              pf: [22, 15, 32, 11, 16, 45, 6, 24, 6, 6, 6, 6]}
-    for sheet, ws_widths in widths.items():
-        for cell in sheet[1]:
-            cell.font = Font(bold=True)
-        for col, w in zip("ABCDEFGHIJKL", ws_widths):
-            sheet.column_dimensions[col].width = w
-        sheet.freeze_panes = "A2"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    wb.save(out)
+    for sheet, widths in ((ws, [10, 8, 14, 22, 70, 50, 50]), (steps, [8, 14, 4, 110]),
+                          (comp, [8, 22, 50, 8, 30, 30, 11, 40]), (pf, [22, 15, 32, 11, 16, 45, 6, 24, 6, 6, 6, 6])):
+        style(sheet, widths)
+    return wb
 
 
 def print_results(results: list[Identification], extracted: list[ExtractedInvoice], trace: bool,

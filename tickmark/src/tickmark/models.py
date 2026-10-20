@@ -48,12 +48,24 @@ class ExtractedField(BaseModel):
     snip: Snip | None = None
 
 
+class ExtractedLineItem(BaseModel):
+    """One invoice line as read. Values normalised like ExtractedField; None if not read."""
+
+    description: str = ""
+    quantity: str | None = None
+    unit_price: str | None = None
+    amount: str | None = None
+    confidence: float | None = None  # the lowest confidence of the line's values
+    snip: Snip | None = None
+
+
 class ExtractedInvoice(BaseModel):
     """What an extractor read from one PDF. Field names: vendor, invoice_number, invoice_date,
     total, subtotal, tax. A field the extractor could not read is absent."""
 
     file: str
     fields: dict[str, ExtractedField] = Field(default_factory=dict)
+    line_items: list[ExtractedLineItem] = Field(default_factory=list)
     extractor: str = ""  # azure-docint | labels
     model_id: str = ""
     api_version: str | None = None
@@ -179,3 +191,36 @@ class Identification(BaseModel):
     snips: list[Snip] = Field(default_factory=list)
     comparisons: list[Comparison] = Field(default_factory=list)  # this row vs every PDF
     steps: list[str] = Field(default_factory=list)  # the decision, in the order it was made
+
+
+class FieldAgreement(BaseModel):
+    """One claimed field of a row compared with the linked PDF."""
+
+    field: str  # number | vendor | amount | date
+    row_value: str
+    pdf_value: str
+    result: Literal["agrees", "differs", "unverifiable"]
+    delta: str = ""  # e.g. "+250.00 (row − PDF)", "+3 days (row − PDF)"
+    detail: str = ""
+
+
+class CheckResult(BaseModel):
+    """One check of the invoice on its own (totals, lines, VAT, period, duplicates)."""
+
+    name: str
+    status: Literal["pass", "fail", "warn", "not_checkable"]
+    detail: str
+    snips: list[Snip] = Field(default_factory=list)
+
+
+class Verdict(BaseModel):
+    """Does the PDF back the row's claim? matched ✅ / difference ⚠️ / needs_review 👀 / no_evidence ❓."""
+
+    row_id: str
+    excel_row: int | None = None
+    verdict: Literal["matched", "difference", "needs_review", "no_evidence"]
+    invoice_file: str | None = None
+    agreements: list[FieldAgreement] = Field(default_factory=list)
+    checks: list[CheckResult] = Field(default_factory=list)
+    reasons: list[str] = Field(default_factory=list)  # why it is not ✅, one line per issue
+    steps: list[str] = Field(default_factory=list)

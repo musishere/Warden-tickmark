@@ -45,3 +45,11 @@ def test_uncached_without_credentials_fails_loudly(tmp_path):
     pdf.write_bytes(b"%PDF-1.4 other")
     with pytest.raises(DocIntError, match="TICKMARK_DOCINT_ENDPOINT"):
         DocIntExtractor(cache_dir=tmp_path / "cache", endpoint="", key="").extract(pdf)
+
+
+def test_line_items_are_parsed_with_their_lowest_confidence():
+    inv = parse_result(json.loads(FIXTURE.read_text()), "INV-2026-1222.pdf")
+    assert [(li.description, li.quantity, li.unit_price, li.amount) for li in inv.line_items] == [
+        ("Cloud hosting (monthly)", "8", "371.42", "2971.36"), ("Data backup service", "7", "71.64", "501.48"),
+        ("Laptop repair", "5", "431.98", "2159.9"), ("Cloud hosting (monthly)", "10", "146.01", "1460.1")]
+    assert inv.line_items[0].confidence == 0.93 and inv.line_items[0].snip.page == 1

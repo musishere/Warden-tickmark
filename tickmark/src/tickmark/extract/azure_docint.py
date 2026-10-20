@@ -10,7 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from tickmark.config import settings
-from tickmark.models import BBox, ExtractedField, ExtractedInvoice, Snip
+from tickmark.models import BBox, ExtractedField, ExtractedInvoice, ExtractedLineItem, Snip
 
 MODEL_ID = "prebuilt-invoice"
 DEFAULT_CACHE = Path("data/cache/docint")
@@ -84,7 +84,20 @@ def parse_result(result: dict, file: str) -> ExtractedInvoice:
             continue
         fields[name] = ExtractedField(name=name, value=value, confidence=f.get("confidence"),
                                       snip=_snip(f, units))
-    return ExtractedInvoice(file=file, fields=fields, **meta)
+    items = ((docs[0].get("fields") or {}).get("Items") or {}).get("valueArray") or []
+    return ExtractedInvoice(file=file, fields=fields, line_items=[_line(i, units) for i in items], **meta)
+
+
+def _line(item: dict, units: dict) -> ExtractedLineItem:
+    obj = item.get("valueObject") or {}
+    parts = {k: obj.get(k) for k in ("Description", "Quantity", "UnitPrice", "Amount")}
+    confidences = [v["confidence"] for v in [item, *parts.values()] if v and v.get("confidence") is not None]
+    return ExtractedLineItem(
+        description=_value(parts["Description"], "string") or "" if parts["Description"] else "",
+        quantity=_value(parts["Quantity"], "currency") if parts["Quantity"] else None,
+        unit_price=_value(parts["UnitPrice"], "currency") if parts["UnitPrice"] else None,
+        amount=_value(parts["Amount"], "currency") if parts["Amount"] else None,
+        confidence=min(confidences) if confidences else None, snip=_snip(item, units))
 
 
 def _value(f: dict, kind: str) -> str | None:

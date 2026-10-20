@@ -7,12 +7,12 @@ every read and action going through Warden. The LLM extracts; code decides.
 - [ ] Load invoice PDFs from a local folder; Excel sample via openpyxl
 - [ ] Extraction behind an interface: Azure Document Intelligence + LLM, and a fake for tests
 - [ ] Every extracted value keeps a snip (page, bbox, text)
-- [ ] Deterministic checks: line items sum, VAT, date in period, duplicates
-- [ ] Fuzzy match of sample rows to invoices (vendor, amount, date) → ✅ / ⚠️ / ❓
+- [x] Deterministic checks: line items sum, VAT, date in period, duplicates (+ totals reconcile). See PROGRESS.md §8
+- [x] Match sample rows to invoices (vendor, amount, date, number) → ✅ / ⚠️ / ❓ (+ 👀 needs review). See PROGRESS.md §5, §8
 - [ ] All document access via `WardenClient` (token exchange, invoke); deny on any failure
 - [ ] `POST /engagements/{id}/vouch` and `GET /engagements/{id}/runs/{runId}`
 - [x] Storage: Tickmark's own PostgreSQL (append-only audit trail of runs, documents by hash, results,
-  reviews); Docker Compose for local dev. See PROGRESS.md §8
+  reviews); Docker Compose for local dev. See PROGRESS.md §9
 - [ ] 20 synthetic labelled invoices, one prompt-injection invoice, eval script (field accuracy, match precision/recall)
 
 ## Deferred (after MVP)
