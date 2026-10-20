@@ -26,5 +26,6 @@ class LabelExtractor:
                       "invoice_date": label["invoice_date"],
                       "total": label.get("printed_total", label["total"]),
                       "subtotal": label["subtotal"], "tax": label["vat_amount"]}
-        return ExtractedInvoice(file=pdf.name, fields={
-            k: ExtractedField(name=k, value=str(v), confidence=1.0) for k, v in values.items()})
+        return ExtractedInvoice(file=pdf.name, extractor="labels", model_id="ground-truth", raw=label,
+                                fields={k: ExtractedField(name=k, value=str(v), confidence=1.0)
+                                        for k, v in values.items()})

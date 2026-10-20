@@ -68,10 +68,13 @@ class DocIntExtractor:
 
 def parse_result(result: dict, file: str) -> ExtractedInvoice:
     """Turn a saved AnalyzeResult (as_dict JSON) into an ExtractedInvoice."""
+    raw = result
     result = result.get("analyzeResult", result)  # raw REST responses wrap the result
+    meta = {"extractor": "azure-docint", "model_id": result.get("modelId") or MODEL_ID,
+            "api_version": result.get("apiVersion"), "raw": raw}
     docs = result.get("documents") or []
     if not docs:
-        return ExtractedInvoice(file=file)
+        return ExtractedInvoice(file=file, **meta)
     units = {p.get("pageNumber"): p.get("unit") for p in result.get("pages") or []}
     fields: dict[str, ExtractedField] = {}
     for azure_name, (name, kind) in FIELD_MAP.items():
@@ -81,7 +84,7 @@ def parse_result(result: dict, file: str) -> ExtractedInvoice:
             continue
         fields[name] = ExtractedField(name=name, value=value, confidence=f.get("confidence"),
                                       snip=_snip(f, units))
-    return ExtractedInvoice(file=file, fields=fields)
+    return ExtractedInvoice(file=file, fields=fields, **meta)
 
 
 def _value(f: dict, kind: str) -> str | None:

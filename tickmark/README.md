@@ -13,13 +13,19 @@ src/tickmark/          the application (the only code that ships)
   api/                 FastAPI app
   sample/              auditor's Excel sample: loader.py (read) + cleaner.py (keys, flags)
   checks/              deterministic pass/fail checks
-  extract/ match/      invoice extraction and sample-to-invoice matching (to do)
-  models.py config.py warden_client.py
+  extract/             read invoice PDFs (Azure Document Intelligence; labels for tests)
+  match/               which PDF each row is about (identify.py)
+  store/               append-only audit trail in Postgres + evidence store
+  pipeline.py models.py config.py warden_client.py
 tools/                 developer tooling, not shipped
   datagen/             synthetic invoices, labels and sample workbooks
   clean_sample.py      write a cleaned workbook (Clean + Issues sheets)
   compare_sample.py    raw cells vs cleaned values, row by row (optionally vs labels)
   verify_clean.py      prove cleaning lost no rows and changed no values
+  identify_sample.py   row -> PDF, with --trace, --out workbook, --save to the audit DB
+  eval_identify.py     wrong links (must be 0), per dataset
+  show_run.py review.py verify_run.py   read a stored run, add a human review, verify evidence
+migrations/            Alembic: audit tables + append-only triggers
 tests/                 pytest, one file per area
 evals/                 eval set and scoring (to do)
 docs/                  scope and design notes
@@ -27,14 +33,16 @@ data/                  local only, gitignored
   external/            sample pack we were given (+ the original zip)
   generated/           output of tools.datagen
   output/              files written by the tools
+  cache/ store/        Azure result cache; evidence store (files by SHA-256)
 ```
 
 ## Run
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
+docker compose up -d && alembic upgrade head    # Tickmark's Postgres on port 5435
 uvicorn tickmark.api.main:app --reload
-pytest
+pytest                                           # DB tests skip if Postgres is not running
 ```
 
 ## Data tools
@@ -57,3 +65,13 @@ python -m tools.identify_sample data/external/tickmark-sample/sample.xlsx \
     data/external/tickmark-sample/invoices --out data/output/identified.xlsx
 ```
 Azure results are cached in `data/cache/docint/` (one call per PDF, ever).
+
+## Audit trail
+`--save` stores a run in Postgres (append-only): the files by hash, what was read, every row,
+every result with its full trace, and human reviews. See [docs/PROGRESS.md](docs/PROGRESS.md) §8.
+```bash
+python -m tools.identify_sample SAMPLE.xlsx INVOICE_DIR --save --engagement ENG-1
+python -m tools.show_run RUN_ID --trace --out data/output/run.xlsx
+python -m tools.review RUN_ID S-02 --decision accept --reviewer ali
+python -m tools.verify_run RUN_ID
+```

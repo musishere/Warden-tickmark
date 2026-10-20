@@ -1,0 +1,17 @@
+# Tickmark's own Postgres (audit trail of identification runs). Warden has its own database.
+# Host port 5435: 5432-5434 are already used on the dev machine.
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: tickmark
+      POSTGRES_PASSWORD: tickmark
+      POSTGRES_DB: tickmark
+    ports: ["5435:5432"]
+    volumes: [tickmark-pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tickmark -d tickmark"]
+      interval: 2s
+      retries: 30
+volumes:
+  tickmark-pgdata:

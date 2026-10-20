@@ -13,6 +13,9 @@ dependencies = [
   "rapidfuzz>=3.9",
   "azure-ai-documentintelligence>=1.0.0",
   "reportlab>=4.2",
+  "sqlalchemy>=2.0",
+  "psycopg[binary]>=3.2",
+  "alembic>=1.13",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +31,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "."]
+markers = ["db: needs the Tickmark Postgres (docker compose up -d)"]
 
 [tool.ruff]
 line-length = 100

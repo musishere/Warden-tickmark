@@ -54,6 +54,10 @@ class ExtractedInvoice(BaseModel):
 
     file: str
     fields: dict[str, ExtractedField] = Field(default_factory=dict)
+    extractor: str = ""  # azure-docint | labels
+    model_id: str = ""
+    api_version: str | None = None
+    raw: dict | None = Field(default=None, exclude=True)  # what the extractor returned, for the audit store
 
     def get(self, name: str) -> ExtractedField | None:
         return self.fields.get(name)

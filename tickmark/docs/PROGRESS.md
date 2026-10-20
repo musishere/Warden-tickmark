@@ -33,12 +33,24 @@ flowchart LR
         W[/"workbook<br/>Identified · Steps · Comparisons · PDF fields"/]
     end
 
+    subgraph S4["4 · Audit trail (--save)"]
+        DB[("Postgres (append-only)<br/>runs · documents · extractions · sample_rows<br/>sample_issues · match_results · reviews")]
+        ES[("evidence store<br/>data/store/&lt;sha256&gt;")]
+        H["human review<br/>tools.review"]
+    end
+
     X --> L --> C --> M
     P --> A <--> K
     P -. test mode .-> F
     A --> T
     F --> T
     T --> M --> R --> W
+    R --> DB
+    X -. copy by hash .-> ES
+    P -. copy by hash .-> ES
+    H --> DB
+    DB --> SR["show_run · verify_run"]
+    ES -.-> SR
 
     V{{"verify_clean<br/>nothing lost, nothing changed"}}
     E{{"eval_identify<br/>wrong links must be 0"}}
@@ -59,6 +71,10 @@ sample.xlsx ─► load ─► clean ──────────────�
 invoice PDFs ─► Azure DI ⇄ cache ─► trust filter ─► identify (rules) ─► linked / review / none
             └─(test) LabelExtractor ─┘                      │
                                                             └─► trace: steps + comparisons ─► workbook
+                                                            │
+                                    --save ─► Postgres (append-only) + evidence store (files by SHA-256)
+                                                 ▲                         │
+                                       tools.review (human)       show_run · verify_run
 ```
 
 ## What is covered
@@ -150,12 +166,41 @@ Current results with **perfect reading (`--labels`)**, which tests the rules onl
 In the hard set, the one "missed" row is H-04 (a typo'd invoice number), which goes to review by design.
 The eval exits with an error on any wrong link, so it can gate CI.
 
-### 8. Project layout
+### 8. Audit trail in Postgres: `src/tickmark/store/`, `migrations/`
+In audit the result is half of it: you must also show, months later, **what was decided, from
+which exact files, under which rules, and what a human did with it**. With `--save`, a run is
+stored completely (one transaction) in Tickmark's own Postgres database. Warden keeps its own
+database, and `engagement_id` is Warden's id.
+
+| Table | Holds |
+|---|---|
+| `runs` | when, who, engagement, matcher version (git commit), thresholds, extractor + model, completed/failed + error |
+| `documents` | every file by **SHA-256** (sample and PDFs), size, pages, path in the evidence store |
+| `run_documents` | which PDFs this run compared against, and under which file name |
+| `extractions` | what the extractor read: raw result (Azure JSON) + parsed fields with confidence and snips |
+| `sample_rows` | each loaded row exactly as loaded, plus the raw Excel cells, vendor key and flags |
+| `sample_issues` | rows that errored or were skipped, with their raw cells, so no row disappears |
+| `match_results` | one per row: status, linked PDF and page, evidence, candidates, reason, **full trace** (comparisons + steps) |
+| `reviews` | human decisions (accept, choose_candidate + PDF, reject, requested_from_client), who, when, note |
+
+Rules:
+- **Append-only, enforced by Postgres**: a trigger rejects UPDATE, DELETE and TRUNCATE on every
+  table. A re-run is a new run. A human decision is a new review, and the latest one is current.
+- **Linked by hash and id, not by file name**: the same bytes under two names are one document.
+- **Evidence store**: each file used is copied once to `data/store/<sha[:2]>/<sha256>.<ext>` and
+  never overwritten. `verify_run` re-hashes it. (It stands in for Azure Blob Storage.)
+- **The rules stay in code**: the database records what happened; `tickmark.match` decides.
+- The schema is managed by Alembic (`migrations/`); `alembic check` confirms the code and the
+  migrations agree.
+
+### 9. Project layout
 ```
-src/tickmark/   app: api/, sample/ (loader, cleaner), extract/, match/, checks/, models.py
-tools/          datagen/, clean_sample, compare_sample, verify_clean, identify_sample, eval_identify
-tests/          51 tests, all offline
-data/           external/ (given), generated/, output/, cache/   (gitignored)
+src/tickmark/   app: api/, sample/ (loader, cleaner), extract/, match/, store/, checks/, pipeline.py, models.py
+tools/          datagen/, clean_sample, compare_sample, verify_clean, identify_sample, eval_identify,
+                show_run, review, verify_run
+migrations/     Alembic: tables, constraints, append-only triggers
+tests/          67 tests (16 need Postgres and skip cleanly without it)
+data/           external/ (given), generated/, output/, cache/, store/   (gitignored)
 docs/           MVP.md, PROGRESS.md
 ```
 
@@ -173,6 +218,20 @@ python -m tools.identify_sample data/external/tickmark-sample/sample.xlsx \
     data/external/tickmark-sample/invoices --trace --out data/output/identified.xlsx
 ```
 
+Audit database (Tickmark's own Postgres, host port 5435):
+
+```bash
+docker compose up -d                 # start Postgres
+alembic upgrade head                 # create / upgrade the tables
+
+python -m tools.identify_sample data/external/tickmark-sample/sample.xlsx \
+    data/external/tickmark-sample/invoices --save --engagement ENG-1     # prints the run id
+python -m tools.show_run                                 # list runs
+python -m tools.show_run RUN_ID --trace --out data/output/run.xlsx       # rebuilt from the DB only
+python -m tools.review RUN_ID S-02 --decision accept --reviewer ali --note "checked"
+python -m tools.verify_run RUN_ID                        # files unchanged, every row accounted for
+```
+
 Azure credentials go in `tickmark/.env`:
 ```
 TICKMARK_DOCINT_ENDPOINT=https://<resource>.cognitiveservices.azure.com/
@@ -184,6 +243,8 @@ Two separate questions:
 1. **Was the PDF read correctly?** Compare the *PDF fields* sheet with the PDF (click the link).
 2. **Was the decision right?** For a row, read *Steps*, then filter *Comparisons* by that row and
    `Result = equal` to confirm that no other PDF matched as well.
+3. **Months later:** `show_run RUN_ID --trace` shows the same thing from the database, with the
+   reviews. `verify_run RUN_ID` proves the files behind it are the same bytes.
 
 ## Not done yet
 
@@ -193,5 +254,7 @@ Two separate questions:
 | Comparing a linked PDF with its row | Next step: report differences (e.g. amount +250.00, date +3 days) and run the checks in `src/tickmark/checks/deterministic.py` (line items sum, VAT, period, duplicate number). |
 | ✅ / ⚠️ / ❓ verdict | Built on top of the comparison step. |
 | Warden | PDF reads are not yet routed through `WardenClient` (fail closed). |
-| API | `POST /engagements/{id}/vouch` and `GET …/runs/{runId}` are not built yet. |
+| API | `POST /engagements/{id}/vouch` and `GET …/runs/{runId}` are not built yet. They will read from the audit store. |
+| Review UI | Reviews are recorded with `tools.review`; no screen yet. |
+| DB hardening | The app should connect as a role with INSERT/SELECT only (today it owns the tables, so it could drop the triggers). Move the evidence store to Azure Blob Storage with immutability. |
 | Larger eval set | 34 rows is too few to trust a "100%". Grow it towards the 50–100 invoices planned in MVP.md. |

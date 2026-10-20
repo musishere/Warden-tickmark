@@ -7,6 +7,8 @@
 
 Without --labels, PDFs are read with Azure Document Intelligence (cached in data/cache/docint).
 
+--save stores the run in the audit database (see tools.show_run, tools.review, tools.verify_run).
+
 --trace prints the whole process: what was read from each PDF (and what is not trusted, and why),
 each row compared field by field with every PDF that agrees on anything, and the decision steps.
 --out writes the same as a workbook to check by hand, with links that open each PDF:
@@ -16,16 +18,17 @@ each row compared field by field with every PDF that agrees on anything, and the
   PDF fields   everything read from each PDF, confidence, trusted or why not, page + position
 """
 import argparse
+import getpass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
-from tickmark.extract import DocIntExtractor, LabelExtractor, extract_all
-from tickmark.match import identify
+from tickmark.extract import DocIntExtractor, LabelExtractor
 from tickmark.match.identify import pdf_fields
 from tickmark.models import ExtractedInvoice, Identification
-from tickmark.sample import clean_sample, load_sample
+from tickmark.pipeline import IdentificationRun, run_identification
 
 MARK = {"linked": "🔗", "needs_review": "👀", "no_evidence": "❓"}
 RESULT_MARK = {"equal": "✓", "similar": "≈", "differs": "✗", "untrusted": "⚠", "missing": "∅",
@@ -34,12 +37,14 @@ FILL = {"linked": "E2F0D9", "needs_review": "FFF2CC", "no_evidence": "F2F2F2",
         "equal": "E2F0D9", "similar": "FFF2CC", "differs": "FCE4D6", "untrusted": "FFF2CC"}
 
 
+def run_full(sample: Path, invoices: Path, labels: Path | None) -> IdentificationRun:
+    return run_identification(sample, invoices, LabelExtractor(labels) if labels else DocIntExtractor())
+
+
 def run(sample: Path, invoices: Path, labels: Path | None
         ) -> tuple[list[Identification], list[ExtractedInvoice]]:
-    extractor = LabelExtractor(labels) if labels else DocIntExtractor()
-    rows = clean_sample(load_sample(sample).rows).rows
-    extracted = extract_all(extractor, invoices)
-    return identify(rows, extracted), extracted
+    r = run_full(sample, invoices, labels)
+    return r.results, r.extracted
 
 
 def print_extraction(extracted: list[ExtractedInvoice]) -> None:
@@ -72,19 +77,24 @@ def print_trace(r: Identification) -> None:
 
 
 def write_workbook(out: Path, results: list[Identification], extracted: list[ExtractedInvoice],
-                   invoice_dir: Path) -> None:
+                   pdfs: Path | dict[str, Path], reviews: dict | None = None) -> None:
+    """pdfs: the invoice folder, or file name -> path (stored evidence copies when shown from the DB)."""
     def link(cell, file: str | None) -> None:
-        if file:
-            cell.hyperlink = (invoice_dir / file).resolve().as_uri()
+        path = (pdfs.get(file) if isinstance(pdfs, dict) else pdfs / file) if file else None
+        if path:
+            cell.hyperlink = Path(path).resolve().as_uri()
             cell.font = Font(color="0563C1", underline="single")
 
     wb = Workbook()
     ws = wb.active
     ws.title = "Identified"
-    ws.append(["Excel row", "Row", "Status", "Invoice PDF", "Evidence / reason", "Candidates"])
+    ws.append(["Excel row", "Row", "Status", "Invoice PDF", "Evidence / reason", "Candidates", "Reviews"])
     for r in results:
+        history = "\n".join(f"{rv.decided_at:%Y-%m-%d %H:%M} {rv.reviewer}: {rv.decision}"
+                            + (f" → {rv.chosen_file}" if rv.chosen_file else "") + (f" ({rv.note})" if rv.note else "")
+                            for rv in (reviews or {}).get(r.row_id, []))
         ws.append([r.excel_row, r.row_id, r.status, r.invoice_file, "; ".join(r.evidence) or r.reason,
-                   "; ".join(f"{c.invoice_file} ({', '.join(c.agree)})" for c in r.candidates)])
+                   "; ".join(f"{c.invoice_file} ({', '.join(c.agree)})" for c in r.candidates), history])
         ws.cell(ws.max_row, 3).fill = PatternFill("solid", fgColor=FILL[r.status])
         link(ws.cell(ws.max_row, 4), r.invoice_file)
 
@@ -121,7 +131,7 @@ def write_workbook(out: Path, results: list[Identification], extracted: list[Ext
                 pf.cell(pf.max_row, 5).fill = PatternFill("solid", fgColor=FILL["untrusted"])
     pf.auto_filter.ref = pf.dimensions
 
-    widths = {ws: [10, 8, 14, 22, 70, 50], steps: [8, 14, 4, 110], comp: [8, 22, 50, 8, 30, 30, 11, 40],
+    widths = {ws: [10, 8, 14, 22, 70, 50, 50], steps: [8, 14, 4, 110], comp: [8, 22, 50, 8, 30, 30, 11, 40],
               pf: [22, 15, 32, 11, 16, 45, 6, 24, 6, 6, 6, 6]}
     for sheet, ws_widths in widths.items():
         for cell in sheet[1]:
@@ -133,17 +143,9 @@ def write_workbook(out: Path, results: list[Identification], extracted: list[Ext
     wb.save(out)
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("sample", type=Path)
-    ap.add_argument("invoices", type=Path)
-    ap.add_argument("--labels", type=Path, help="use label JSON instead of Azure (testing only)")
-    ap.add_argument("--trace", action="store_true", help="print every step of the process")
-    ap.add_argument("--out", type=Path, help="write the results and the full trace to a workbook")
-    args = ap.parse_args()
-    results, extracted = run(args.sample, args.invoices, args.labels)
-
-    if args.trace:
+def print_results(results: list[Identification], extracted: list[ExtractedInvoice], trace: bool,
+                  reviews: dict | None = None) -> None:
+    if trace:
         print_extraction(extracted)
         print("── Each row " + "─" * 69)
     for r in results:
@@ -152,20 +154,55 @@ def main() -> None:
             print(f"{'':20}· {e}")
         if r.reason:
             print(f"{'':20}{r.reason}")
-            if not args.trace:
+            if not trace:
                 for c in r.candidates:
                     print(f"{'':20}- {c.invoice_file}: agrees on {', '.join(c.agree) or 'nothing'}"
                           + (f" ({c.note})" if c.note else ""))
-        if args.trace:
+        for rv in (reviews or {}).get(r.row_id, []):
+            print(f"{'':20}✍ {rv.decided_at:%Y-%m-%d %H:%M} {rv.reviewer}: {rv.decision}"
+                  + (f" → {rv.chosen_file}" if rv.chosen_file else "") + (f" ({rv.note})" if rv.note else ""))
+        if trace:
             print_trace(r)
             print()
     counts = {s: sum(r.status == s for r in results) for s in MARK}
     print(f"\n{len(results)} rows | linked {counts['linked']} | needs review {counts['needs_review']}"
           f" | no evidence {counts['no_evidence']}")
 
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("sample", type=Path)
+    ap.add_argument("invoices", type=Path)
+    ap.add_argument("--labels", type=Path, help="use label JSON instead of Azure (testing only)")
+    ap.add_argument("--trace", action="store_true", help="print every step of the process")
+    ap.add_argument("--out", type=Path, help="write the results and the full trace to a workbook")
+    ap.add_argument("--save", action="store_true", help="store the run in the audit database")
+    ap.add_argument("--engagement", help="Warden engagement id to file the run under")
+    ap.add_argument("--run-by", default=getpass.getuser(), help="who ran it (default: OS user)")
+    args = ap.parse_args()
+    started = datetime.now(UTC)
+    try:
+        r = run_full(args.sample, args.invoices, args.labels)
+    except Exception as e:
+        if args.save:
+            from tickmark.store import save_failed_run
+
+            run_id = save_failed_run(sample_path=args.sample, run_by=args.run_by, started_at=started,
+                                     engagement_id=args.engagement, error=f"{type(e).__name__}: {e}",
+                                     extractor="labels" if args.labels else "azure-docint")
+            print(f"run failed; recorded as {run_id}")
+        raise
+
+    print_results(r.results, r.extracted, args.trace)
     if args.out:
-        write_workbook(args.out, results, extracted, args.invoices)
+        write_workbook(args.out, r.results, r.extracted, args.invoices)
         print(f"wrote {args.out}")
+    if args.save:
+        from tickmark.store import save_run
+
+        run_id = save_run(r, run_by=args.run_by, started_at=started, engagement_id=args.engagement)
+        print(f"saved run {run_id}\n  show:   python -m tools.show_run {run_id} --trace"
+              f"\n  verify: python -m tools.verify_run {run_id}")
 
 
 if __name__ == "__main__":

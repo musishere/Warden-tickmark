@@ -77,7 +77,7 @@ flowchart LR
     W --> PG[(PostgreSQL<br/>tenants, engagements, walls,<br/>policies, tokens, credits, audit)]
     W --> TOOLS[Tools / data<br/>documents, Excel sample]
     TOOLS --> BLOB[(Azure Blob Storage<br/>PDFs)]
-    TOOLS --> MDB[(MongoDB<br/>extractions + snips)]
+    T --> TPG[(PostgreSQL · Tickmark<br/>runs, documents, extractions + snips,<br/>match results, reviews · append-only)]
     T --> DI[Azure Document Intelligence]
     T --> LLM[LLM]
     IDP[Customer IdP] -->|SCIM| W
@@ -128,7 +128,7 @@ flowchart LR
 | Tickmark agent | Python (FastAPI), Azure Document Intelligence, LLM |
 | Auth | Microsoft Entra ID (OIDC, PKCE), token exchange |
 | Relational data | PostgreSQL |
-| Documents / extractions | MongoDB |
+| Documents / extractions / match results | PostgreSQL (Tickmark's own database, JSONB, append-only) |
 | Files | Azure Blob Storage |
 | Async work | Azure Service Bus (start with a local queue) |
 | Demo surface | Excel add-in (Office.js, React + TypeScript) |
@@ -154,13 +154,17 @@ flowchart LR
 | `credit_ledger` | id, tenant_id, user_id, agent_id, type, amount, reservation_id, idempotency_key UNIQUE |
 | `audit_log` | id, tenant_id, actor_agent, on_behalf_of, action, resource, decision, reason, created_at |
 
-**MongoDB (Tickmark)**
+**PostgreSQL (Tickmark, separate database; append-only, enforced by triggers)**
 
-| Collection | Shape |
+| Table | Key columns |
 |---|---|
-| `documents` | tenant_id, engagement_id, blob_path, status, pages |
-| `extractions` | document_id, fields: `{ name, value, confidence, snip: { page, bbox, text } }` |
-| `match_results` | engagement_id, sample_row, document_id, status, differences, checks |
+| `documents` | id, sha256 UNIQUE, kind (pdf / sample), size_bytes, pages, storage_path |
+| `extractions` | document_id, extractor, model_id, raw (JSONB), fields: `{ name: { value, confidence, snip: { page, bbox, text } } }` |
+| `runs` | id, engagement_id (Warden's), run_by, started_at, status, matcher_version, thresholds |
+| `run_documents` | run_id, file_name, document_id, extraction_id |
+| `sample_rows` / `sample_issues` | run_id, row_id, excel_row, values, raw_cells / reason |
+| `match_results` | run_id, sample_row_id, status, document_id, evidence, candidates, comparisons, steps |
+| `reviews` | match_result_id, reviewer, decision, chosen_document_id, note, decided_at |
 
 ## API sketch
 

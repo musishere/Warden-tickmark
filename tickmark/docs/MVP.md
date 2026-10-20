@@ -11,11 +11,12 @@ every read and action going through Warden. The LLM extracts; code decides.
 - [ ] Fuzzy match of sample rows to invoices (vendor, amount, date) → ✅ / ⚠️ / ❓
 - [ ] All document access via `WardenClient` (token exchange, invoke); deny on any failure
 - [ ] `POST /engagements/{id}/vouch` and `GET /engagements/{id}/runs/{runId}`
-- [ ] Storage: local JSON/SQLite file, no external database
+- [x] Storage: Tickmark's own PostgreSQL (append-only audit trail of runs, documents by hash, results,
+  reviews); Docker Compose for local dev. See PROGRESS.md §8
 - [ ] 20 synthetic labelled invoices, one prompt-injection invoice, eval script (field accuracy, match precision/recall)
 
 ## Deferred (after MVP)
-- MongoDB, Azure Blob Storage, Service Bus
+- Azure Blob Storage (for the evidence store), Service Bus
 - 50–100 invoice eval set, multi-run consistency, CI regression gate
 - Credits reservation on runs
 - Snip viewer endpoint and Excel add-in

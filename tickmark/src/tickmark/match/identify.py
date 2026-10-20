@@ -38,6 +38,8 @@ from tickmark.sample import normalize_vendor
 CONFIDENCE_MIN = 0.90
 VENDOR_SIMILAR = 90  # rapidfuzz token_sort_ratio on vendor keys: similar enough to review
 AMOUNT_TOL = Decimal("0.01")
+# Recorded with every stored run, so an old result can be explained after the rules change.
+THRESHOLDS = {"confidence_min": CONFIDENCE_MIN, "vendor_similar": VENDOR_SIMILAR, "amount_tol": str(AMOUNT_TOL)}
 
 
 def normalize_number(text: str) -> str:
@@ -217,6 +219,18 @@ def _snips(c: _Cand) -> list[Snip]:
     return [c.pdf.snips[names[a]] for a in c.agree if names[a] in c.pdf.snips]
 
 
+def _near_miss(comparisons: list[Comparison]) -> str:
+    """The PDF that came closest, for a row with no candidate."""
+    def agreeing(c: Comparison) -> list[FieldCheck]:
+        return [k for k in c.checks if k.result in ("equal", "similar")]
+
+    best = max(comparisons, key=lambda c: len(agreeing(c)), default=None)
+    if best is None or not agreeing(best):
+        return "Closest PDF: none agrees on any field"
+    fields = ", ".join(f"{k.field} {k.result}" for k in agreeing(best))
+    return f"Closest PDF: {best.invoice_file} ({fields}); {best.outcome}"
+
+
 def _candidate(c: _Cand) -> Candidate:
     return Candidate(invoice_file=c.pdf.file, agree=c.agree, note=c.note)
 
@@ -240,6 +254,7 @@ def identify(rows: list[CleanRow], invoices: list[ExtractedInvoice]) -> list[Ide
         base = {"row_id": row.row_id, "excel_row": row.excel_row,
                 "candidates": [_candidate(c) for c in cands], "comparisons": [cmp for cmp, _ in compared]}
         if not cands:
+            steps.append(_near_miss([cmp for cmp, _ in compared]))
             steps.append("No PDF agrees on enough fields (rule 2/3) → no_evidence")
             results.append(Identification(**base, status="no_evidence", steps=steps,
                                           reason="no PDF agrees on two or more fields"))
