@@ -12,7 +12,7 @@ import argparse
 from pathlib import Path
 
 from tickmark.store import get_run, list_runs
-from tools.identify_sample import build_workbook, print_results, save_workbook
+from tools.identify_sample import build_workbook, print_results, save_workbook, style
 from tools.tenant_args import add_tenant_args, tenant_context
 from tools.vouch_sample import add_verdict_sheets, print_verdicts
 
@@ -46,6 +46,10 @@ def main() -> None:
         print(f"  ERROR: {run['error']}")
     if s.sample:
         print(f"  sample sheet {run['sheet']!r}, sha256 {s.sample['sha256']}")
+    if s.mapping:
+        m = s.mapping
+        by = f", confirmed by {m['confirmed_by']}" if m["confirmed_by"] else ""
+        print(f"  columns: {m['source']} mapping{by}: " + ", ".join(f"{f}={c}" for f, c in m["columns"].items()))
     print(f"  {len(s.files)} PDFs, {len(s.results)} rows, {len(s.issues)} row issue(s)")
     for i in s.issues:
         print(f"    Excel row {i['excel_row']}: {i['kind']}: {i['reason']}")
@@ -60,6 +64,16 @@ def main() -> None:
         wb = build_workbook(s.results, s.extracted, pdfs, s.reviews)
         if s.verdicts:
             add_verdict_sheets(wb, s.verdicts, pdfs)
+        if s.mapping:
+            ms = wb.create_sheet("Mapping")
+            ms.append(["Field", "Column", "Header", "Source", "Confirmed by", "Notes"])
+            heads = {h["col"]: h["header"] for h in s.mapping["headers"]}
+            for f, c in s.mapping["columns"].items():
+                ms.append([f, c, heads.get(c), s.mapping["source"], s.mapping["confirmed_by"] or "",
+                           s.mapping["notes"].get(f, "")])
+            for c in [c for c in heads if c not in s.mapping["columns"].values()]:
+                ms.append(["(not used)", c, heads[c], "", "", "kept in raw, no rule reads it"])
+            style(ms, [16, 8, 24, 12, 18, 80])
         save_workbook(wb, args.out)
         print(f"wrote {args.out}")
 

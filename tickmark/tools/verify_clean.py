@@ -19,9 +19,11 @@ from decimal import Decimal
 from pathlib import Path
 
 from openpyxl import load_workbook
+from openpyxl.utils import column_index_from_string
 
+from tickmark.fields.mapping import ColumnMapping
 from tickmark.sample import clean_sample
-from tickmark.sample.loader import _map_headers, load_sample
+from tickmark.sample.loader import load_sample
 
 INVISIBLE = re.compile(r"[\s​‌‍﻿]+")
 
@@ -53,15 +55,17 @@ def _same_date(raw, d: date) -> bool:
     return sorted(nums) == sorted([d.year, d.month, d.day]) and len(nums) == 3
 
 
-def verify(src: Path, dst: Path | None = None) -> list[str]:
+def verify(src: Path, dst: Path | None = None, mapping: ColumnMapping | None = None) -> list[str]:
+    """mapping: which column holds which field (default: the header aliases). Only the column
+    letters are taken from it; every value is checked against the raw cells."""
     problems: list[str] = []
     ws = load_workbook(src, data_only=True).worksheets[0]
     raw = {r[0].row: [c.value for c in r] for r in ws.iter_rows()}
     header = next(n for n, v in raw.items() if not _blank(v))
-    cols = _map_headers(raw[header])
     data_rows = {n for n, v in raw.items() if n > header and not _blank(v)}
 
-    loaded = load_sample(src)
+    loaded = load_sample(src, mapping=mapping)
+    cols = {f: column_index_from_string(c) - 1 for f, c in loaded.mapping.columns.items()}
     buckets = ([r.excel_row for r in loaded.rows], [e.row_number for e in loaded.errors],
                [s.row_number for s in loaded.skipped])
     seen = [n for b in buckets for n in b]

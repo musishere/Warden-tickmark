@@ -211,7 +211,47 @@ Over all 20 generated PDFs the checks find every labelled defect (lines 2, VAT 3
 duplicate 2) with no false alarms. With a deliberately loose 1000 tolerance the eval reports
 false ✅ and fails, so it does catch a weakened rule.
 
-### 9. Audit trail in Postgres: `src/tickmark/store/`, `migrations/`
+### 9. Any spreadsheet layout: `src/tickmark/fields/`, `src/tickmark/definitions/`, `tools/map_columns.py`
+Clients name their columns freely ("Inv Amt", "Payee", "Factuurdatum"). Tickmark no longer needs
+fixed headers: **which fields an audit needs is data (a definition), how values are read is fixed
+code (field types), and which column holds which field is a mapping, decided once per client.**
+
+| Layer | Fixed or flexible | What it is |
+|---|---|---|
+| Raw capture (`fields/sheet.py`) | no schema | every row kept as a list of cells `{col, header, value}`: duplicate or odd headers survive |
+| Field types (`fields/types.py`) | fixed, tested once | `money` (exact decimal, stored as a string), `date`, `name`, `identifier`, `text` |
+| Definition (`definitions/`) | data, versioned | `invoice_vouching` v1: the fields, their types, roles (key / party / corroborating / label), which document field each is compared with, and the checks |
+| Mapping (`fields/mapping.py`) | per client + header layout | their column → our field; saved, append-only, with who confirmed it |
+| Engine (`match/`, `vouch/`, `sample/cleaner.py`) | fixed code | runs on the definition by role and type, not on hard-coded column names |
+
+Which mapping a run uses, in order:
+1. a confirmed mapping saved for this client and **this exact header layout** → used automatically;
+2. the known header names (aliases) cover every required field → used automatically;
+3. otherwise the run **does not start**: "needs mapping: vendor, amount, invoice_date" and the command to fix it.
+
+`tools.map_columns` shows each field next to its candidate column and that column's value pattern,
+accepts `--set FIELD=COL`, checks every value of each mapped column (at least 80 % must read as the
+field's type; no column used twice), and saves only on `--confirm`.
+
+**Claude suggestions** (`--suggest`, model `claude-opus-5-5`, structured output) — **off by default**:
+- `TICKMARK_LLM_MAPPING=on` sends the headers and a **value pattern per column, never values**:
+  formats (`dd.mm.yyyy`, `comma decimal`), magnitudes in words ("tens to thousands"), word counts,
+  identifier shapes (`INV-2026-1037` → `AAA-9999-9999`). A test checks that no cell value appears in
+  what is sent.
+- Real example values (up to 5 per column) are a **separate setting**, `TICKMARK_LLM_MAPPING_VALUES=on`.
+- Header text is untrusted: it is fenced as data, and the answer must fit a schema built for this
+  sheet, which allows only its real column letters and our field names. Validation against all values
+  then catches a wrong or injected proposal, and a person still confirms.
+
+Proof it changed nothing: on all 34 test rows, every identification and verdict is identical to
+before the change, trace included (one trace line reworded). An unfamiliar copy of the generated sample
+(`tools.datagen.unfamiliar`: Dutch headers, European number text, extra columns, a duplicate header,
+an injection note) is refused until mapped, and once mapped gives exactly the standard verdicts.
+
+Found on the way: the amount parser read `"S-01"` as −1 (it dropped letters). It now refuses any
+value with letters other than a currency code.
+
+### 10. Audit trail in Postgres: `src/tickmark/store/`, `migrations/`
 In audit the result is half of it: you must also show, months later, **what was decided, from
 which exact files, under which rules, and what a human did with it**. With `--save`, a run is
 stored completely (one transaction) in Tickmark's own Postgres database. Warden keeps its own
@@ -225,7 +265,8 @@ database; tenant and engagement ids are Warden's.
 | `documents` | every file by **SHA-256** (sample and PDFs), size, pages, path in the evidence store |
 | `run_documents` | which PDFs this run compared against, and under which file name |
 | `extractions` | what the extractor read: raw result (Azure JSON) + parsed fields with confidence and snips |
-| `sample_rows` | each loaded row exactly as loaded, plus the raw Excel cells, vendor key and flags |
+| `sample_rows` | each row: `raw` cells as received (column, header, value) + `fields` (typed, mapped; money as a string), party key, flags. Rows recorded before 0004 keep their original fixed columns, untouched |
+| `column_mappings` | which column held which field for a client's header layout: source (aliases / Claude / person), who confirmed it, Claude's proposal as sent and answered |
 | `sample_issues` | rows that errored or were skipped, with their raw cells, so no row disappears |
 | `verdicts` | one per row: ✅ / ⚠️ / 👀 / ❓, the PDF checked, every field agreement, every invoice check, reasons, steps |
 | `match_results` | one per row: status, linked PDF and page, evidence, candidates, reason, **full trace** (comparisons + steps) |
@@ -249,7 +290,7 @@ enforces the separation, not just the code:
 
 | Layer | What it does |
 |---|---|
-| **Row-level security** on all 11 tables | A session sees and can insert only rows of the tenant **and** engagement it set (`app.tenant_id`, `app.engagement_id`, transaction-local). **Fail closed**: nothing set → nothing visible, nothing writable. |
+| **Row-level security** on all 12 tables | A session sees and can insert only rows of the tenant **and** engagement it set (`app.tenant_id`, `app.engagement_id`, transaction-local). **Fail closed**: nothing set → nothing visible, nothing writable. |
 | **Composite foreign keys** `(tenant_id, engagement_id, id)` | A result, review or file link can only point at rows of the same engagement, even with forged ids. |
 | **Two database roles** | `tickmark` (owner) runs migrations and registers firms and engagements. The app connects as **`tickmark_app`**: `SELECT` + `INSERT` only, not the owner, so it cannot update, delete, truncate, drop triggers or switch off row-level security. |
 | **Per-engagement files** | The same PDF in two engagements is stored twice (separate documents, separate evidence folders), so an ethical wall (Coke vs Pepsi in one firm) also holds for storage. |
@@ -260,14 +301,16 @@ In code, every store call takes a `TenantContext(tenant_id, engagement_id, user)
 tests (`tests/test_tenancy.py`) include `tenant_a_cannot_read_tenant_b`, the ethical wall,
 fail-closed, forged ids, cross-engagement links, and everything the app role must not be able to do.
 
-### 10. Project layout
+### 11. Project layout
 ```
-src/tickmark/   app: api/, sample/ (loader, cleaner), extract/, match/, vouch/, store/, checks/, pipeline.py, models.py
+src/tickmark/   app: api/, fields/ (sheet, types, mapping, profile, llm_mapping), definitions/, sample/, extract/,
+                match/, vouch/, store/, checks/, pipeline.py, models.py
 tools/          datagen/, clean_sample, compare_sample, verify_clean, identify_sample, eval_identify,
-                vouch_sample, eval_vouch, show_run, review, verify_run, tenants (register firms + engagements)
-migrations/     Alembic: 0001 audit tables + append-only triggers, 0002 multi-tenant (RLS, roles), 0003 verdicts
+                vouch_sample, eval_vouch, map_columns, show_run, review, verify_run, tenants (register firms + engagements)
+migrations/     Alembic: 0001 audit tables + append-only triggers, 0002 multi-tenant (RLS, roles), 0003 verdicts,
+                0004 flexible input (additive: no stored row rewritten, no trigger disabled)
 docker/initdb/  creates the tickmark_app login role on a fresh dev database
-tests/          105 tests (32 need Postgres and skip cleanly without it)
+tests/          122 tests (35 need Postgres and skip cleanly without it)
 data/           external/ (given), generated/, output/, cache/, store/   (gitignored)
 docs/           MVP.md, PROGRESS.md
 ```
@@ -332,6 +375,9 @@ Two separate questions:
 | Materiality | A per-engagement "clearly trivial" threshold; today any difference over 0.01 is ⚠️. |
 | VAT rates | Per-country rate tables; today 0 / 9 / 21 % for every engagement. |
 | Duplicates across runs | Duplicates are checked within one run, not yet against the engagement's earlier runs. |
+| Live Claude mapping | Built and tested offline; no Anthropic credentials yet. `pytest -m llm` runs one real call on the unfamiliar sheet. |
+| LLM policy per firm | The Claude settings are global; they should become a per-firm Warden policy. |
+| New audit types | The definition format supports them; only `invoice_vouching` ships. A second type (e.g. expense receipts) proves it end to end. |
 | Reviewing verdicts | Reviews are recorded on the identification; a review step for verdicts is next. |
 | Warden | PDF reads are not yet routed through `WardenClient` (fail closed). |
 | API | `POST /engagements/{id}/vouch` and `GET …/runs/{runId}` are not built yet. They will read from the audit store. |

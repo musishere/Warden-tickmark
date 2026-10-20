@@ -19,6 +19,7 @@ from tickmark.models import (
 )
 from tickmark.store.context import TenantContext, scoped
 from tickmark.store.schema import (
+    column_mappings,
     documents,
     engagements,
     extractions,
@@ -53,6 +54,7 @@ class StoredRun:
     issues: list[dict]
     reviews: dict[str, list[Review]] = field(default_factory=dict)  # by row_id, oldest first
     verdicts: list[Verdict] = field(default_factory=list)  # one per result, if the run vouched the claims
+    mapping: dict | None = None  # the column_mappings row the run used (runs since migration 0004)
 
 
 def _run_uuid(run_id: UUID | str) -> UUID:
@@ -122,8 +124,12 @@ def get_run(ctx: TenantContext, run_id: UUID | str, db: Engine | None = None) ->
             by_row.setdefault(result_row[rv["match_result_id"]], []).append(Review(
                 rv["reviewer"], rv["decision"], name_of.get(rv["chosen_document_id"]), rv["note"],
                 rv["decided_at"]))
+        mapping = None
+        if run["mapping_id"]:
+            mapping = dict(conn.execute(select(column_mappings).where(column_mappings.c.id == run["mapping_id"]))
+                           .mappings().one())
     return StoredRun(dict(run), dict(sample) if sample else {}, files, extracted, results, issues, by_row,
-                     stored_verdicts)
+                     stored_verdicts, mapping)
 
 
 def engagement_period(ctx: TenantContext, db: Engine | None = None) -> tuple:

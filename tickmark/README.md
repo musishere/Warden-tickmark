@@ -29,6 +29,7 @@ tools/                 developer tooling, not shipped
   eval_vouch.py        verdicts vs labels, defects found per check (false ✅ must be 0)
   show_run.py review.py verify_run.py   read a stored run, add a human review, verify evidence
   tenants.py           register audit firms (tenants) and client engagements
+  map_columns.py       which column holds which field, once per client (Claude can suggest)
 migrations/            Alembic: audit tables, append-only triggers, multi-tenant row-level security
 docker/initdb/         creates the tickmark_app database role (dev)
 tests/                 pytest, one file per area
@@ -80,11 +81,22 @@ python -m tools.vouch_sample SAMPLE.xlsx INVOICE_DIR --period 2026-01-01:2026-12
 python -m tools.eval_vouch --labels
 ```
 
+## Any spreadsheet layout
+Known headers map automatically. For anything else, map the columns once per client; the mapping is
+saved and reused for that header layout. Claude can suggest it from headers and value patterns
+(no values leave unless you separately allow it). See [docs/PROGRESS.md](docs/PROGRESS.md) §9.
+```bash
+python -m tools.map_columns SAMPLE.xlsx                                   # what is known, what is missing
+TICKMARK_LLM_MAPPING=on python -m tools.map_columns SAMPLE.xlsx --suggest # Claude suggests (patterns only)
+python -m tools.map_columns SAMPLE.xlsx --set amount=D --set vendor=B --set invoice_date=C --confirm  # save
+python -m tools.vouch_sample SAMPLE.xlsx INVOICE_DIR --save              # uses the saved mapping
+```
+
 ## Audit trail (multi-tenant)
 `--save` stores a run in Postgres (append-only): the files by hash, what was read, every row,
 every result with its full trace, and human reviews. Every row belongs to one **audit firm
 (tenant)** and one **client engagement**; Postgres row-level security keeps them apart, and the
-app connects as `tickmark_app` (read + append only). See [docs/PROGRESS.md](docs/PROGRESS.md) §9.
+app connects as `tickmark_app` (read + append only). See [docs/PROGRESS.md](docs/PROGRESS.md) §10.
 ```bash
 python -m tools.tenants add-tenant "Firm A"              # prints the tenant id
 python -m tools.tenants add-engagement <tenant id> "Coke" --period 2026-01-01:2026-12-31

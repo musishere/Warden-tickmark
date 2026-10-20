@@ -2,6 +2,7 @@
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
+from tickmark.definitions import INVOICE_VOUCHING, Definition
 from tickmark.match.identify import CONFIDENCE_MIN, normalize_number
 from tickmark.models import CleanRow, ExtractedInvoice, FieldAgreement
 from tickmark.sample import normalize_vendor
@@ -38,48 +39,42 @@ def _shown(inv: ExtractedInvoice, name: str) -> str:
     return f.value if f else ""
 
 
-def compare(cr: CleanRow, inv: ExtractedInvoice, amount_tol: Decimal = Decimal("0.01")) -> list[FieldAgreement]:
+def compare(cr: CleanRow, inv: ExtractedInvoice, amount_tol: Decimal = Decimal("0.01"),
+            definition: Definition = INVOICE_VOUCHING) -> list[FieldAgreement]:
+    """Each claimed field the definition compares, in its order, by type. An optional field the
+    row leaves empty is not compared."""
     row = cr.row
     out: list[FieldAgreement] = []
-
-    def unverifiable(field: str, row_value: str, name: str, why: str) -> FieldAgreement:
-        return FieldAgreement(field=field, row_value=row_value, pdf_value=_shown(inv, name),
-                              result="unverifiable", detail=why)
-
-    if row.reference:
-        number, why = read(inv, "invoice_number")
-        if number is None:
-            out.append(unverifiable("number", row.reference, "invoice_number", why))
+    for spec in definition.compared:
+        rv, ev, label = row.get(spec.name), spec.evidence_field, spec.label
+        if rv is None:
+            continue
+        shown = rv.isoformat() if isinstance(rv, date) else str(rv)
+        if spec.type == "money":
+            pv, why = read_amount(inv, ev)  # for an invoice: the printed total, what the invoice claims
+        elif spec.type == "date":
+            pv, why = read_date(inv, ev)
         else:
-            same = normalize_number(number) == normalize_number(row.reference)
-            out.append(FieldAgreement(field="number", row_value=row.reference, pdf_value=number,
-                                      result="agrees" if same else "differs"))
-
-    vendor, why = read(inv, "vendor")
-    if vendor is None:
-        out.append(unverifiable("vendor", row.vendor, "vendor", why))
-    else:
-        key = normalize_vendor(vendor)
-        same = key == cr.vendor_key
-        out.append(FieldAgreement(field="vendor", row_value=row.vendor, pdf_value=vendor,
-                                  result="agrees" if same else "differs",
-                                  detail=f"key {key!r}" if same else f"keys {cr.vendor_key!r} / {key!r}"))
-
-    total, why = read_amount(inv, "total")  # the printed total: what the invoice claims
-    if total is None:
-        out.append(unverifiable("amount", str(row.amount), "total", why))
-    else:
-        diff = row.amount - total
-        out.append(FieldAgreement(field="amount", row_value=str(row.amount), pdf_value=str(total),
-                                  result="agrees" if abs(diff) <= amount_tol else "differs",
-                                  delta="" if abs(diff) <= amount_tol else f"{diff:+} (row − PDF)"))
-
-    d, why = read_date(inv, "invoice_date")
-    if d is None:
-        out.append(unverifiable("date", row.invoice_date.isoformat(), "invoice_date", why))
-    else:
-        days = (row.invoice_date - d).days
-        out.append(FieldAgreement(field="date", row_value=row.invoice_date.isoformat(), pdf_value=d.isoformat(),
-                                  result="agrees" if days == 0 else "differs",
-                                  delta="" if days == 0 else f"{days:+d} days (row − PDF)"))
+            pv, why = read(inv, ev)
+        if pv is None:
+            out.append(FieldAgreement(field=label, row_value=shown, pdf_value=_shown(inv, ev),
+                                      result="unverifiable", detail=why))
+        elif spec.type == "money":
+            diff = rv - pv
+            ok = abs(diff) <= amount_tol
+            out.append(FieldAgreement(field=label, row_value=shown, pdf_value=str(pv), result="agrees" if ok else "differs",
+                                      delta="" if ok else f"{diff:+} (row − PDF)"))
+        elif spec.type == "date":
+            days = (rv - pv).days
+            out.append(FieldAgreement(field=label, row_value=shown, pdf_value=pv.isoformat(),
+                                      result="agrees" if days == 0 else "differs",
+                                      delta="" if days == 0 else f"{days:+d} days (row − PDF)"))
+        elif spec.type == "name":
+            key = normalize_vendor(pv)
+            same = key == cr.vendor_key
+            out.append(FieldAgreement(field=label, row_value=shown, pdf_value=pv, result="agrees" if same else "differs",
+                                      detail=f"key {key!r}" if same else f"keys {cr.vendor_key!r} / {key!r}"))
+        else:  # identifier, text
+            same = normalize_number(pv) == normalize_number(rv) if spec.type == "identifier" else pv == rv
+            out.append(FieldAgreement(field=label, row_value=shown, pdf_value=pv, result="agrees" if same else "differs"))
     return out

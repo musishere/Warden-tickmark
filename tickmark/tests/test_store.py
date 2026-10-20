@@ -55,7 +55,8 @@ def test_issues_are_stored_so_no_row_is_lost(tenancy):
     stored = get_run(tenancy.coke, _save(tenancy, run), tenancy.app)
     assert len(stored.results) == 7
     assert [(i["excel_row"], i["kind"]) for i in stored.issues] == [(10, "error")]
-    assert stored.issues[0]["raw_cells"][0].startswith("Synthetic test data")
+    first = stored.issues[0]["raw"][0]  # since 0004: cells keep their column and header
+    assert (first["col"], first["header"]) == ("A", "Row ID") and first["value"].startswith("Synthetic test data")
 
 
 @pytest.mark.parametrize("table", AUDIT_TABLES)
@@ -142,3 +143,49 @@ def test_failed_run_is_recorded(tenancy):
         n_rows = c.execute(select(func.count()).select_from(sample_rows)
                            .where(sample_rows.c.run_id == run_id)).scalar_one()
     assert (row["status"], row["error"], n_rows) == ("failed", "DocIntError: not configured", 0)
+
+
+def test_confirmed_mapping_is_saved_reused_and_verified(tenancy, tmp_path):
+    """An unfamiliar sheet, mapped once and confirmed, is stored with its mapping and verifies.
+    Runs in Pepsi: test_tampered_evidence_is_detected corrupts a stored copy in Coke on purpose."""
+    from tickmark.fields.mapping import ColumnMapping, headers_sha256
+    from tickmark.fields.sheet import read_sheet
+    from tickmark.store.mappings import current_mapping, save_mapping
+    from tools.datagen.unfamiliar import EXPECTED, write_unfamiliar
+
+    t = tenancy
+    write_unfamiliar(GEN / "sample.xlsx", tmp_path)
+    sheet = read_sheet(tmp_path / "sample.xlsx")
+    m = ColumnMapping(definition="invoice_vouching", version=1, columns=EXPECTED, source="person",
+                      confirmed_by="ali", headers_sha256=headers_sha256(sheet))
+    mid = save_mapping(t.pepsi, m, sheet.headers, db=t.app)
+    assert save_mapping(t.pepsi, m, sheet.headers, db=t.app) == mid  # identical: reused, not duplicated
+    found = current_mapping(t.pepsi, "invoice_vouching", 1, headers_sha256(sheet), db=t.app)
+    assert found.columns == EXPECTED and found.confirmed_by == "ali"
+    assert current_mapping(t.coke, "invoice_vouching", 1, headers_sha256(sheet), db=t.app) is None  # per engagement
+
+    start, end = PERIOD[GEN]
+    run = run_vouch(tmp_path / "sample.xlsx", GEN / "invoices", LabelExtractor(GEN / "labels"),
+                    VouchPolicy(period_start=start, period_end=end), found)
+    run_id = _save(t, run, t.pepsi)
+    stored = get_run(t.pepsi, run_id, t.app)
+    assert stored.run["mapping_id"] == mid and stored.run["definition"]["name"] == "invoice_vouching"
+    assert stored.verdicts == run.verdicts
+    assert verify_run(t.pepsi, run_id, t.app) == []  # re-applies the run's own mapping to the stored sheet
+    with scoped(t.pepsi, t.app) as c:
+        row = c.execute(select(sample_rows.c.fields, sample_rows.c.raw).where(sample_rows.c.run_id == run_id)
+                        .order_by(sample_rows.c.excel_row).limit(1)).one()
+    assert row.fields["amount"]["col"] == "D" and isinstance(row.fields["amount"]["value"], str)
+    assert [c["header"] for c in row.raw] == ["Volgnr", "Payee", "Factuurdatum", "Inv Amt", "Valuta",
+                                              "Kostenplaats", "Notes", "Notes"]
+
+
+def test_unconfirmed_claude_mapping_cannot_be_stored(tenancy):
+    from sqlalchemy.exc import IntegrityError
+
+    from tickmark.fields.mapping import ColumnMapping
+    from tickmark.store.mappings import save_mapping
+
+    m = ColumnMapping(definition="invoice_vouching", version=1, columns={"amount": "D"}, source="claude")
+    with pytest.raises(IntegrityError, match="column_mappings_confirmed"):
+        save_mapping(tenancy.coke, m, [], db=tenancy.app)

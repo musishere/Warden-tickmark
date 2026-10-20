@@ -116,6 +116,25 @@ extractions = Table(
     UniqueConstraint("document_id", "extractor", "model_id", "raw_sha256", name="extractions_once"),
 )
 
+column_mappings = Table(
+    "column_mappings", metadata,
+    _id(),
+    *_scope("column_mappings"),
+    Column("definition", Text, nullable=False),  # e.g. invoice_vouching
+    Column("definition_version", Integer, nullable=False),
+    Column("headers", JSONB, nullable=False),  # the header row it was made for: [{col, header}]
+    Column("headers_sha256", Text, nullable=False),
+    Column("columns", JSONB, nullable=False),  # field -> column letter
+    Column("source", Text, nullable=False),  # aliases | claude | person
+    Column("notes", JSONB, nullable=False, server_default=text("'{}'::jsonb")),  # field -> reason
+    Column("proposal", JSONB),  # what was sent to and returned by Claude, if it proposed
+    Column("confirmed_by", Text),  # who confirmed it; null for header aliases
+    _now("created_at"),
+    _scoped_key("column_mappings"),
+    CheckConstraint("source in ('aliases', 'claude', 'person')", name="column_mappings_source"),
+    CheckConstraint("source = 'aliases' or confirmed_by is not null", name="column_mappings_confirmed"),
+)
+
 runs = Table(
     "runs", metadata,
     _id(),
@@ -131,8 +150,11 @@ runs = Table(
     Column("thresholds", JSONB, nullable=False),
     Column("extractor", Text, nullable=False),
     Column("model_id", Text),
+    Column("definition", JSONB),  # the audit test definition used (name, version, snapshot)
+    Column("mapping_id", UUID(as_uuid=True)),  # which column mapping turned the sheet into fields
     _scoped_key("runs"),
     _link("runs", "sample_document_id", "documents"),
+    _link("runs", "mapping_id", "column_mappings"),
     CheckConstraint("status in ('completed', 'failed')", name="runs_status"),
     CheckConstraint("status = 'failed' or sample_document_id is not null", name="runs_completed_has_sample"),
 )
@@ -158,14 +180,21 @@ sample_rows = Table(
     Column("run_id", UUID(as_uuid=True), nullable=False),
     Column("row_id", Text, nullable=False),  # as the auditor wrote it, e.g. S-01
     Column("excel_row", Integer, nullable=False),
-    Column("vendor", Text, nullable=False),
-    Column("amount", Numeric, nullable=False),  # exact decimal as loaded, no float
-    Column("invoice_date", Date, nullable=False),
+    # rows written before 0004 (fixed invoice columns; kept exactly as recorded, never rewritten)
+    Column("vendor", Text),
+    Column("amount", Numeric),  # exact decimal as loaded, no float
+    Column("invoice_date", Date),
     Column("reference", Text),
-    Column("vendor_key", Text, nullable=False),
+    Column("raw_cells", JSONB),  # the Excel cells exactly as read (values only)
+    # rows written since 0004: any sheet, any definition
+    Column("raw", JSONB),  # the row's cells as received: [{col, header, value, kind}]
+    Column("fields", JSONB),  # mapped, typed values: {name: {type, value, col}}; money as a string
+    Column("vendor_key", Text),  # the party's matching key
     Column("flags", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
-    Column("raw_cells", JSONB, nullable=False),  # the Excel cells exactly as read
     _scoped_key("sample_rows"),
+    CheckConstraint("(raw is not null and fields is not null) or "
+                    "(vendor is not null and amount is not null and invoice_date is not null and raw_cells is not null)",
+                    name="sample_rows_old_or_new_form"),
     _link("sample_rows", "run_id", "runs"),
     UniqueConstraint("run_id", "excel_row", name="sample_rows_once"),
 )
@@ -178,8 +207,10 @@ sample_issues = Table(
     Column("excel_row", Integer, nullable=False),
     Column("kind", Text, nullable=False),  # error | skipped
     Column("reason", Text, nullable=False),
-    Column("raw_cells", JSONB, nullable=False),
+    Column("raw_cells", JSONB),  # before 0004
+    Column("raw", JSONB),  # since 0004: [{col, header, value, kind}]
     _link("sample_issues", "run_id", "runs"),
+    CheckConstraint("raw is not null or raw_cells is not null", name="sample_issues_has_cells"),
     CheckConstraint("kind in ('error', 'skipped')", name="sample_issues_kind"),
     UniqueConstraint("run_id", "excel_row", name="sample_issues_once"),
 )
@@ -253,5 +284,5 @@ Index("runs_engagement", runs.c.tenant_id, runs.c.engagement_id, runs.c.started_
 Index("engagements_tenant", engagements.c.tenant_id)
 
 REGISTRY_TABLES = ["tenants", "engagements"]
-AUDIT_TABLES = ["documents", "extractions", "runs", "run_documents", "sample_rows", "sample_issues",
-                "match_results", "reviews", "verdicts"]
+AUDIT_TABLES = ["documents", "extractions", "column_mappings", "runs", "run_documents", "sample_rows",
+                "sample_issues", "match_results", "reviews", "verdicts"]

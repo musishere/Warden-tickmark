@@ -16,6 +16,7 @@ dependencies = [
   "sqlalchemy>=2.0",
   "psycopg[binary]>=3.2",
   "alembic>=1.13",
+  "anthropic>=1.15",
 ]
 
 [project.optional-dependencies]
@@ -31,7 +32,8 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "."]
-markers = ["db: needs the Tickmark Postgres (docker compose up -d)"]
+markers = ["db: needs the Tickmark Postgres (docker compose up -d)", "llm: calls the Claude API (opt-in: pytest -m llm)"]
+addopts = "-m 'not llm'"
 
 [tool.ruff]
 line-length = 100

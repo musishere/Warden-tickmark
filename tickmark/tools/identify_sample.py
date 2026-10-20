@@ -30,6 +30,7 @@ from tickmark.extract import DocIntExtractor, LabelExtractor
 from tickmark.match.identify import pdf_fields
 from tickmark.models import ExtractedInvoice, Identification
 from tickmark.pipeline import IdentificationRun, run_identification
+from tools.mapping_args import add_mapping_arg, choose_mapping, mapping_rows
 from tools.tenant_args import add_tenant_args, tenant_context
 
 MARK = {"linked": "🔗", "needs_review": "👀", "no_evidence": "❓"}
@@ -39,8 +40,8 @@ FILL = {"linked": "E2F0D9", "needs_review": "FFF2CC", "no_evidence": "F2F2F2",
         "equal": "E2F0D9", "similar": "FFF2CC", "differs": "FCE4D6", "untrusted": "FFF2CC"}
 
 
-def run_full(sample: Path, invoices: Path, labels: Path | None) -> IdentificationRun:
-    return run_identification(sample, invoices, LabelExtractor(labels) if labels else DocIntExtractor())
+def run_full(sample: Path, invoices: Path, labels: Path | None, mapping=None) -> IdentificationRun:
+    return run_identification(sample, invoices, LabelExtractor(labels) if labels else DocIntExtractor(), mapping)
 
 
 def run(sample: Path, invoices: Path, labels: Path | None
@@ -99,6 +100,17 @@ def style(sheet, widths: list[int]) -> None:
 def save_workbook(wb: Workbook, out: Path) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out)
+
+
+def add_mapping_sheet(wb: Workbook, loaded) -> None:
+    """Which column held which field, where that mapping came from, and the columns no rule reads."""
+    if loaded.mapping is None:
+        return
+    ms = wb.create_sheet("Mapping")
+    ms.append(["Field", "Column", "Header", "Source", "Confirmed by", "Notes"])
+    for r in mapping_rows(loaded):
+        ms.append(r)
+    style(ms, [16, 8, 24, 12, 18, 80])
 
 
 def write_workbook(out: Path, results: list[Identification], extracted: list[ExtractedInvoice],
@@ -196,11 +208,13 @@ def main() -> None:
     ap.add_argument("--out", type=Path, help="write the results and the full trace to a workbook")
     ap.add_argument("--save", action="store_true", help="store the run in the audit database")
     add_tenant_args(ap)
+    add_mapping_arg(ap)
     args = ap.parse_args()
     ctx = tenant_context(ap, args) if args.save else None
+    mapping = choose_mapping(args.sample, args.mapping, ctx)
     started = datetime.now(UTC)
     try:
-        r = run_full(args.sample, args.invoices, args.labels)
+        r = run_full(args.sample, args.invoices, args.labels, mapping)
     except Exception as e:
         if args.save:
             from tickmark.store import save_failed_run
@@ -213,7 +227,9 @@ def main() -> None:
 
     print_results(r.results, r.extracted, args.trace)
     if args.out:
-        write_workbook(args.out, r.results, r.extracted, args.invoices)
+        wb = build_workbook(r.results, r.extracted, args.invoices)
+        add_mapping_sheet(wb, r.loaded)
+        save_workbook(wb, args.out)
         print(f"wrote {args.out}")
     if args.save:
         from tickmark.store import save_run

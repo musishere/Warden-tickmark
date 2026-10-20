@@ -7,6 +7,7 @@ from sqlalchemy import Engine, select
 from tickmark.sample import load_sample
 from tickmark.store.context import TenantContext, scoped
 from tickmark.store.evidence import sha256_file
+from tickmark.store.mappings import mapping_by_id
 from tickmark.store.queries import get_run
 from tickmark.store.record import canonical_sha256
 from tickmark.store.schema import extractions, sample_rows
@@ -37,9 +38,10 @@ def verify_run(ctx: TenantContext, run_id: UUID | str, db: Engine | None = None)
         # 3. the stored rows are exactly what the stored sample loads to: nothing lost, nothing changed
         db_rows = {r["excel_row"]: r for r in conn.execute(
             select(sample_rows).where(sample_rows.c.run_id == run_id)).mappings()}
+        mapping = mapping_by_id(conn, stored.run["mapping_id"]) if stored.run.get("mapping_id") else None
     sample_path = stored.sample.get("storage_path")
     if sample_path and Path(sample_path).is_file():
-        loaded = load_sample(sample_path)
+        loaded = load_sample(sample_path, mapping=mapping)  # the run's own mapping, re-applied
         want_rows = {r.excel_row: r for r in loaded.rows}
         want_issues = {e.row_number for e in loaded.errors} | {s.row_number for s in loaded.skipped}
         got_issues = {i["excel_row"] for i in stored.issues}
@@ -49,8 +51,13 @@ def verify_run(ctx: TenantContext, run_id: UUID | str, db: Engine | None = None)
             problems.append(f"Excel row {n}: {'missing from' if n in want_issues else 'unexpected in'} sample_issues")
         for n in sorted(set(want_rows) & set(db_rows)):
             w, g = want_rows[n], db_rows[n]
-            if (w.row_id, w.vendor, w.amount, w.invoice_date, w.reference) != (
-                    g["row_id"], g["vendor"], g["amount"], g["invoice_date"], g["reference"]):
+            if g["fields"] is not None:  # since 0004: typed fields + raw cells
+                same = (w.row_id, {k: f.model_dump(mode="json") for k, f in w.fields.items()},
+                        [c.model_dump(mode="json") for c in w.raw]) == (g["row_id"], g["fields"], g["raw"])
+            else:  # rows recorded before 0004, kept as they were
+                same = (w.row_id, w.vendor, w.amount, w.invoice_date, w.reference) == (
+                    g["row_id"], g["vendor"], g["amount"], g["invoice_date"], g["reference"])
+            if not same:
                 problems.append(f"Excel row {n}: stored values differ from the sample")
         results_rows = {r.excel_row for r in stored.results}
         for n in sorted(set(db_rows) - results_rows):

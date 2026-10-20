@@ -3,21 +3,21 @@ tenant + engagement (see tickmark.store.context)."""
 import hashlib
 import json
 import subprocess
-from datetime import UTC, date, datetime
-from decimal import Decimal
+from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from uuid import UUID
 
-from openpyxl import load_workbook
 from sqlalchemy import Connection, Engine, select
 from sqlalchemy.dialects.postgresql import insert
 
+from tickmark.definitions import DEFINITIONS, INVOICE_VOUCHING
 from tickmark.match.identify import THRESHOLDS
 from tickmark.models import ExtractedInvoice, Identification
 from tickmark.pipeline import IdentificationRun
 from tickmark.store import evidence
 from tickmark.store.context import TenantContext, scoped
+from tickmark.store.mappings import insert_mapping
 from tickmark.store.schema import (
     documents,
     extractions,
@@ -44,22 +44,6 @@ def matcher_version() -> str:
         return f"tickmark {pkg} @ {commit}{'+dirty' if dirty else ''}"
     except (OSError, subprocess.CalledProcessError):
         return f"tickmark {pkg} @ no-git"
-
-
-def _json_cell(v):
-    if isinstance(v, datetime):
-        return v.isoformat()
-    if isinstance(v, date):
-        return v.isoformat()
-    if isinstance(v, Decimal):
-        return str(v)
-    return v
-
-
-def raw_cells_by_row(sample: Path) -> tuple[str, dict[int, list]]:
-    """The first sheet's cells exactly as the loader saw them, per Excel row."""
-    ws = load_workbook(sample, data_only=True).worksheets[0]
-    return ws.title, {r[0].row: [_json_cell(c.value) for c in r] for r in ws.iter_rows()}
 
 
 def canonical_sha256(data) -> str:
@@ -119,15 +103,18 @@ def _result_values(r: Identification, run_id: UUID, sample_row_id: UUID, doc_ids
 def save_run(run: IdentificationRun, ctx: TenantContext, *, started_at: datetime, db: Engine | None = None) -> UUID:
     """Store a finished run in ctx's engagement: documents (by hash), extractions, rows, issues,
     results. One transaction: all of it or nothing."""
-    sheet, raw = raw_cells_by_row(run.sample_path)
+    loaded = run.loaded
+    definition = DEFINITIONS[run.cleaned.rows[0].row.definition] if run.cleaned.rows else INVOICE_VOUCHING
     model_ids = sorted({inv.model_id for inv in run.extracted if inv.model_id})
     scope = _scope(ctx)
     with scoped(ctx, db) as conn:
         sample_doc = _document(conn, ctx, run.sample_path, "sample")
+        mapping_id = insert_mapping(conn, ctx, loaded.mapping, loaded.headers) if loaded.mapping else None
         run_id = conn.execute(runs.insert().values(
             **scope, run_by=ctx.user, started_at=started_at,
             finished_at=datetime.now(UTC), status="completed", sample_document_id=sample_doc,
-            sheet=sheet, matcher_version=matcher_version(),
+            sheet=loaded.sheet, matcher_version=matcher_version(),
+            definition=definition.snapshot(), mapping_id=mapping_id,
             thresholds={**THRESHOLDS, "vouch": run.policy.model_dump(mode="json") if run.policy else None},
             extractor=",".join(sorted({inv.extractor for inv in run.extracted})) or "none",
             model_id=",".join(model_ids) or None,
@@ -145,15 +132,16 @@ def save_run(run: IdentificationRun, ctx: TenantContext, *, started_at: datetime
         for row in run.loaded.rows:
             cr = flags[row.excel_row]
             row_ids[row.excel_row] = conn.execute(sample_rows.insert().values(
-                **scope, run_id=run_id, row_id=row.row_id, excel_row=row.excel_row, vendor=row.vendor,
-                amount=row.amount, invoice_date=row.invoice_date, reference=row.reference,
-                vendor_key=cr.vendor_key, flags=cr.flags, raw_cells=raw.get(row.excel_row, []),
+                **scope, run_id=run_id, row_id=row.row_id, excel_row=row.excel_row,
+                raw=[c.model_dump(mode="json") for c in row.raw],
+                fields={k: v.model_dump(mode="json") for k, v in row.fields.items()},
+                vendor_key=cr.vendor_key, flags=cr.flags,
             ).returning(sample_rows.c.id)).scalar_one()
-        issues = [(e.row_number, "error", e.message) for e in run.loaded.errors]
-        issues += [(s.row_number, "skipped", s.reason) for s in run.loaded.skipped]
-        for n, kind, reason in issues:
+        issues = [(e.row_number, "error", e.message, e.raw) for e in loaded.errors]
+        issues += [(s.row_number, "skipped", s.reason, s.raw) for s in loaded.skipped]
+        for n, kind, reason, cells in issues:
             conn.execute(sample_issues.insert().values(**scope, run_id=run_id, excel_row=n, kind=kind, reason=reason,
-                                                       raw_cells=raw.get(n, [])))
+                                                       raw=[c.model_dump(mode="json") for c in cells]))
 
         result_ids: dict[int, UUID] = {}
         for r in run.results:

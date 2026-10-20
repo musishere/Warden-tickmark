@@ -119,8 +119,8 @@ def test_verify_clean_catches_tampering(tmp_path, monkeypatch, tamper, expect):
 
     write_messy_sample(tmp_path)
 
-    def tampered(path):
-        res = load_sample(path)
+    def tampered(path, **kw):
+        res = load_sample(path, **kw)
         tamper(res)
         return res
 

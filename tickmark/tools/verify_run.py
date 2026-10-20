@@ -11,6 +11,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from tickmark.fields.mapping import ColumnMapping
 from tickmark.store import get_run, verify_run
 from tools.tenant_args import add_tenant_args, tenant_context
 from tools.verify_clean import verify as verify_clean
@@ -26,9 +27,15 @@ def main() -> None:
         problems = verify_run(ctx, args.run_id)
     except KeyError:
         raise SystemExit(f"no run {args.run_id} in this engagement") from None
-    sample = get_run(ctx, args.run_id).sample.get("storage_path")
+    stored = get_run(ctx, args.run_id)
+    sample = stored.sample.get("storage_path")
+    mapping = None
+    if stored.mapping:  # the run's own column mapping, so the check reads the same columns the run did
+        m = stored.mapping
+        mapping = ColumnMapping(definition=m["definition"], version=m["definition_version"], columns=m["columns"],
+                                source=m["source"], confirmed_by=m["confirmed_by"], headers_sha256=m["headers_sha256"])
     if sample and Path(sample).is_file():
-        problems += [f"sample: {p}" for p in verify_clean(Path(sample))]
+        problems += [f"sample: {p}" for p in verify_clean(Path(sample), mapping=mapping)]
     for p in problems:
         print(f"❌ {p}")
     print("✅ run verified: evidence unchanged, every row accounted for" if not problems

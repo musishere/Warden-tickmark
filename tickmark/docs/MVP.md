@@ -12,7 +12,7 @@ every read and action going through Warden. The LLM extracts; code decides.
 - [ ] All document access via `WardenClient` (token exchange, invoke); deny on any failure
 - [ ] `POST /engagements/{id}/vouch` and `GET /engagements/{id}/runs/{runId}`
 - [x] Storage: Tickmark's own PostgreSQL (append-only audit trail of runs, documents by hash, results,
-  reviews); Docker Compose for local dev. See PROGRESS.md §9
+  reviews); Docker Compose for local dev. See PROGRESS.md §10
 - [ ] 20 synthetic labelled invoices, one prompt-injection invoice, eval script (field accuracy, match precision/recall)
 
 ## Deferred (after MVP)

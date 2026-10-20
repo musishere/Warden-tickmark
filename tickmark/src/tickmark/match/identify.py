@@ -23,6 +23,7 @@ from decimal import Decimal, InvalidOperation
 
 from rapidfuzz import fuzz
 
+from tickmark.definitions import INVOICE_VOUCHING, Definition, FieldSpec
 from tickmark.models import (
     Candidate,
     CleanRow,
@@ -50,12 +51,9 @@ def normalize_number(text: str) -> str:
 @dataclass
 class _Pdf:
     file: str
-    vendor_key: str | None = None
-    vendor: str | None = None
-    number: str | None = None
-    raw_number: str | None = None
-    invoice_date: date | None = None
-    total: Decimal | None = None
+    shown: dict[str, str] = field(default_factory=dict)  # evidence field -> trusted value as read
+    value: dict[str, object] = field(default_factory=dict)  # evidence field -> typed trusted value
+    key: dict[str, str] = field(default_factory=dict)  # evidence field -> matching key (names, numbers)
     snips: dict[str, Snip] = field(default_factory=dict)
     fields: dict[str, PdfField] = field(default_factory=dict)
 
@@ -69,12 +67,17 @@ class _Cand:
     rank: tuple
 
 
-def pdf_fields(inv: ExtractedInvoice) -> list[PdfField]:
+def _noun(spec: FieldSpec) -> str:
+    """'the invoice number' -> 'invoice number': how a field is named in notes."""
+    return spec.description.removeprefix("the ") or spec.label
+
+
+def pdf_fields(inv: ExtractedInvoice, definition: Definition = INVOICE_VOUCHING) -> list[PdfField]:
     """What was read from a PDF and whether each value may be used as evidence (and why not)."""
-    return list(_trusted(inv).fields.values())
+    return list(_trusted(inv, definition).fields.values())
 
 
-def _trusted(inv: ExtractedInvoice) -> _Pdf:
+def _trusted(inv: ExtractedInvoice, definition: Definition = INVOICE_VOUCHING) -> _Pdf:
     pdf = _Pdf(file=inv.file)
     for name, f in inv.fields.items():
         why = ""
@@ -104,23 +107,35 @@ def _trusted(inv: ExtractedInvoice) -> _Pdf:
             distrust(name, "not a number")
             return None
 
-    if v := value("vendor"):
-        pdf.vendor, pdf.vendor_key = v, normalize_vendor(v)
-    if n := value("invoice_number"):
-        pdf.raw_number, pdf.number = n, normalize_number(n) or None
-    if d := value("invoice_date"):
-        try:
-            pdf.invoice_date = date.fromisoformat(d)
-        except ValueError:
-            distrust("invoice_date", "not a date")
-    total, sub, tax = money("total"), money("subtotal"), money("tax")
-    if total is not None:
-        if sub is None or tax is None:
-            distrust("total", "cannot reconcile: subtotal or tax not read")
-        elif abs(sub + tax - total) > AMOUNT_TOL:
-            distrust("total", f"subtotal {sub} + tax {tax} = {sub + tax} ≠ total {total}")
+    for spec in definition.compared:
+        ev = spec.evidence_field
+        v = value(ev)
+        if v is None:
+            continue
+        if spec.type == "identifier":
+            if k := normalize_number(v):
+                pdf.shown[ev], pdf.key[ev] = v, k
+        elif spec.type == "name":
+            pdf.shown[ev], pdf.key[ev] = v, normalize_vendor(v)
+        elif spec.type == "date":
+            try:
+                pdf.value[ev], pdf.shown[ev] = date.fromisoformat(v), v
+            except ValueError:
+                distrust(ev, "not a date")
+        elif spec.type == "money" and ev not in definition.reconcile and (m := money(ev)) is not None:
+            pdf.value[ev], pdf.shown[ev] = m, v
+    # a total counts only if it reconciles with its parts (total = subtotal + tax)
+    for ev, parts in definition.reconcile.items():
+        total, part_values = money(ev), [money(p) for p in parts]  # parts parsed even without a total
+        if total is None:
+            continue
+        if any(pv is None for pv in part_values):
+            distrust(ev, f"cannot reconcile: {' or '.join(parts)} not read")
+        elif abs(sum(part_values) - total) > AMOUNT_TOL:
+            terms = " + ".join(f"{p} {pv}" for p, pv in zip(parts, part_values, strict=True))
+            distrust(ev, f"{terms} = {sum(part_values)} ≠ {ev} {total}")
         else:
-            pdf.total = total
+            pdf.value[ev], pdf.shown[ev] = total, str(total)
     return pdf
 
 
@@ -129,75 +144,92 @@ def _shown(pdf: _Pdf, name: str) -> str:
     return f.value if f else ""
 
 
-def _check_field(pdf: _Pdf, name: str, row_value: str, ok: bool, detail_if_differs: str = "") -> FieldCheck:
-    f = pdf.fields.get(name)
-    label = {"invoice_number": "number", "vendor": "vendor", "total": "amount", "invoice_date": "date"}[name]
+def _check_field(pdf: _Pdf, spec: FieldSpec, row_value: str, ok: bool, detail_if_differs: str = "") -> FieldCheck:
+    f = pdf.fields.get(spec.evidence_field)
     if f is None:
-        return FieldCheck(field=label, row_value=row_value, pdf_value="", result="missing")
+        return FieldCheck(field=spec.label, row_value=row_value, pdf_value="", result="missing")
     if not f.trusted:
-        return FieldCheck(field=label, row_value=row_value, pdf_value=f.value, result="untrusted",
+        return FieldCheck(field=spec.label, row_value=row_value, pdf_value=f.value, result="untrusted",
                           detail=f.why_not)
-    return FieldCheck(field=label, row_value=row_value, pdf_value=f.value,
+    return FieldCheck(field=spec.label, row_value=row_value, pdf_value=f.value,
                       result="equal" if ok else "differs", detail="" if ok else detail_if_differs)
 
 
-def _compare(cr: CleanRow, pdf: _Pdf) -> tuple[Comparison, _Cand | None]:
+def _compare(cr: CleanRow, pdf: _Pdf, definition: Definition = INVOICE_VOUCHING) -> tuple[Comparison, _Cand | None]:
+    """This row vs one PDF, field by field in the definition's order, then the linking rules
+    (module docstring) applied by role: key, party, corroborating."""
     row = cr.row
     agree: list[str] = []
     checks: list[FieldCheck] = []
+    key_spec = next(iter(definition.by_role("key")), None)
+    party = definition.by_role("party")[0]
+    corroborating = [s.label for s in definition.by_role("corroborating")]
+    key_conflict = party_similar = False
+    ratio, money_diff, date_diff = 0.0, Decimal(0), 0
 
-    ref = normalize_number(row.reference) if row.reference else None
-    number_conflict = bool(ref and pdf.number and ref != pdf.number)
-    if ref and pdf.number and ref == pdf.number:
-        agree.append("number")
-    if ref:
-        checks.append(_check_field(pdf, "invoice_number", row.reference, "number" in agree))
-    else:
-        checks.append(FieldCheck(field="number", row_value="", pdf_value=_shown(pdf, "invoice_number"),
-                                 result="not in row"))
+    for spec in definition.compared:
+        ev, rv = spec.evidence_field, row.get(spec.name)
+        if rv is None:
+            checks.append(FieldCheck(field=spec.label, row_value="", pdf_value=_shown(pdf, ev), result="not in row"))
+            continue
+        if spec.role == "key":
+            ref = normalize_number(rv)
+            if ev in pdf.key and ref == pdf.key[ev]:
+                agree.append(spec.label)
+            key_conflict = bool(ref and ev in pdf.key and ref != pdf.key[ev])
+            checks.append(_check_field(pdf, spec, rv, spec.label in agree))
+        elif spec.type == "name":
+            ratio = fuzz.token_sort_ratio(cr.vendor_key, pdf.key[ev]) if ev in pdf.key else 0
+            if pdf.key.get(ev) == cr.vendor_key:
+                agree.append(spec.label)
+            party_similar = spec.label not in agree and ratio >= VENDOR_SIMILAR
+            fc = _check_field(pdf, spec, rv, spec.label in agree, f"similarity {ratio:.0f}")
+            if fc.result == "equal":
+                fc.detail = f"key {cr.vendor_key!r}"
+            elif party_similar:
+                fc.result, fc.detail = "similar", f"similarity {ratio:.0f}, keys {cr.vendor_key!r} / {pdf.key[ev]!r}"
+            checks.append(fc)
+        elif spec.type == "money":
+            pv = pdf.value.get(ev)
+            diff = abs(rv - pv) if pv is not None else None
+            if diff is not None and diff <= AMOUNT_TOL:
+                agree.append(spec.label)
+            money_diff += diff or 0
+            checks.append(_check_field(pdf, spec, str(rv), spec.label in agree,
+                                       f"{rv - pv:+} (row − PDF)" if pv is not None else ""))
+        elif spec.type == "date":
+            pv = pdf.value.get(ev)
+            days = (rv - pv).days if pv is not None else None
+            if days == 0:
+                agree.append(spec.label)
+            date_diff += abs(days or 0)
+            checks.append(_check_field(pdf, spec, rv.isoformat(), spec.label in agree,
+                                       f"{days:+d} days (row − PDF)" if pv is not None else ""))
 
-    ratio = fuzz.token_sort_ratio(cr.vendor_key, pdf.vendor_key) if pdf.vendor_key else 0
-    if pdf.vendor_key == cr.vendor_key:
-        agree.append("vendor")
-    vendor_similar = "vendor" not in agree and ratio >= VENDOR_SIMILAR
-    vc = _check_field(pdf, "vendor", row.vendor, "vendor" in agree, f"similarity {ratio:.0f}")
-    if vc.result == "equal":
-        vc.detail = f"key {cr.vendor_key!r}"
-    elif vendor_similar:
-        vc.result, vc.detail = "similar", f"similarity {ratio:.0f}, keys {cr.vendor_key!r} / {pdf.vendor_key!r}"
-    checks.append(vc)
-
-    amount_diff = abs(row.amount - pdf.total) if pdf.total is not None else None
-    if amount_diff is not None and amount_diff <= AMOUNT_TOL:
-        agree.append("amount")
-    delta = f"{row.amount - pdf.total:+} (row − PDF)" if pdf.total is not None else ""
-    checks.append(_check_field(pdf, "total", str(row.amount), "amount" in agree, delta))
-
-    date_diff = abs((row.invoice_date - pdf.invoice_date).days) if pdf.invoice_date else None
-    if date_diff == 0:
-        agree.append("date")
-    days = f"{(row.invoice_date - pdf.invoice_date).days:+d} days (row − PDF)" if pdf.invoice_date else ""
-    checks.append(_check_field(pdf, "invoice_date", row.invoice_date.isoformat(), "date" in agree, days))
-
-    corroborated = "vendor" in agree and ("amount" in agree or "date" in agree)
+    key = key_spec.label if key_spec else None
+    corroborated = party.label in agree and any(c in agree for c in corroborating)
+    all_corroborating = set(corroborating) <= set(agree)
     cand: _Cand | None = None
-    rank_of = lambda eligible: (eligible, len(agree), ratio, -(amount_diff or 0), -(date_diff or 0))
-    if "number" in agree:
+    rank_of = lambda eligible: (eligible, len(agree), ratio, -money_diff, -date_diff)
+    if key and key in agree:
         eligible = len(agree) >= 2
-        note = "" if eligible else "only the invoice number agrees"
+        note = "" if eligible else f"only the {_noun(key_spec)} agrees"
         cand = _Cand(pdf, agree, eligible, note, rank_of(eligible))
-        outcome = ("can link: invoice number + " + ", ".join(agree[1:])) if eligible else f"review only: {note}"
-    elif number_conflict and (corroborated or (vendor_similar and {"amount", "date"} <= set(agree))):
-        note = f"invoice number differs: row {row.reference!r}, PDF {pdf.raw_number!r}"
+        outcome = (f"can link: {_noun(key_spec)} + " + ", ".join(a for a in agree if a != key)) if eligible \
+            else f"review only: {note}"
+    elif key_conflict and (corroborated or (party_similar and all_corroborating)):
+        note = (f"{_noun(key_spec)} differs: row {row.get(key_spec.name)!r}, "
+                f"PDF {pdf.shown.get(key_spec.evidence_field)!r}")
         cand = _Cand(pdf, agree, False, note, rank_of(False))
         outcome = f"review only: {note}"
-    elif number_conflict:
-        outcome = "not a candidate: invoice number differs and too little else agrees"
+    elif key_conflict:
+        outcome = f"not a candidate: {_noun(key_spec)} differs and too little else agrees"
     elif corroborated:
         cand = _Cand(pdf, agree, True, "", rank_of(True))
         outcome = "can link: " + " + ".join(agree)
-    elif vendor_similar and {"amount", "date"} <= set(agree):
-        note = f"vendor only similar: row {row.vendor!r}, PDF {pdf.vendor!r}"
+    elif party_similar and all_corroborating:
+        note = (f"{party.label} only similar: row {row.get(party.name)!r}, "
+                f"PDF {pdf.shown.get(party.evidence_field)!r}")
         cand = _Cand(pdf, agree, False, note, rank_of(False))
         outcome = f"review only: {note}"
     else:
@@ -205,18 +237,31 @@ def _compare(cr: CleanRow, pdf: _Pdf) -> tuple[Comparison, _Cand | None]:
     return Comparison(invoice_file=pdf.file, checks=checks, outcome=outcome), cand
 
 
-def _evidence(cr: CleanRow, c: _Cand) -> list[str]:
-    row, pdf = cr.row, c.pdf
-    text = {"number": f"invoice number {pdf.raw_number} equal",
-            "vendor": f"vendor {pdf.vendor!r} equal (key {pdf.vendor_key!r})",
-            "amount": f"amount {pdf.total} equal",
-            "date": f"date {row.invoice_date.isoformat()} equal"}
-    return [text[a] for a in c.agree]
+def _evidence(cr: CleanRow, c: _Cand, definition: Definition = INVOICE_VOUCHING) -> list[str]:
+    by_label = {s.label: s for s in definition.compared}
+    out = []
+    for a in c.agree:
+        spec = by_label[a]
+        shown = c.pdf.shown.get(spec.evidence_field)
+        if spec.role == "key":
+            out.append(f"{_noun(spec)} {shown} equal")
+        elif spec.type == "name":
+            out.append(f"{spec.label} {shown!r} equal (key {c.pdf.key[spec.evidence_field]!r})")
+        else:
+            out.append(f"{spec.label} {shown} equal")
+    return out
 
 
-def _snips(c: _Cand) -> list[Snip]:
-    names = {"number": "invoice_number", "vendor": "vendor", "amount": "total", "date": "invoice_date"}
+def _snips(c: _Cand, definition: Definition = INVOICE_VOUCHING) -> list[Snip]:
+    names = {s.label: s.evidence_field for s in definition.compared}
     return [c.pdf.snips[names[a]] for a in c.agree if names[a] in c.pdf.snips]
+
+
+def _describe(cr: CleanRow, spec: FieldSpec) -> str:
+    v = cr.row.get(spec.name)
+    if spec.type == "name":
+        return f"{spec.label} {v!r} (key {cr.vendor_key!r})"
+    return f"{spec.label} {v.isoformat() if isinstance(v, date) else v}"
 
 
 def _near_miss(comparisons: list[Comparison]) -> str:
@@ -235,18 +280,19 @@ def _candidate(c: _Cand) -> Candidate:
     return Candidate(invoice_file=c.pdf.file, agree=c.agree, note=c.note)
 
 
-def identify(rows: list[CleanRow], invoices: list[ExtractedInvoice]) -> list[Identification]:
-    pdfs = [_trusted(inv) for inv in invoices]
+def identify(rows: list[CleanRow], invoices: list[ExtractedInvoice],
+             definition: Definition = INVOICE_VOUCHING) -> list[Identification]:
+    pdfs = [_trusted(inv, definition) for inv in invoices]
     results: list[Identification] = []
     claims: dict[str, list[tuple[int, _Cand]]] = {}
 
     for cr in rows:
         row = cr.row
-        compared = [_compare(cr, p) for p in pdfs]
+        compared = [_compare(cr, p, definition) for p in pdfs]
         cands = sorted((c for _, c in compared if c), key=lambda c: c.rank, reverse=True)
         steps = [
-            (f"Row: vendor {row.vendor!r} (key {cr.vendor_key!r}), amount {row.amount}, "
-            f"date {row.invoice_date.isoformat()}, invoice no {row.reference or '—'}"),
+            "Row: " + ", ".join(_describe(cr, spec) for spec in definition.compared if spec.role != "key")
+            + "".join(f", {_noun(spec)} {row.get(spec.name) or '—'}" for spec in definition.by_role("key")),
             f"Compared with {len(pdfs)} PDFs: {len(cands)} candidate(s)"
             + "".join(f"\n  {c.pdf.file}: agrees on {', '.join(c.agree)}"
                       f" ({'can link' if c.eligible else 'review only: ' + c.note})" for c in cands),
@@ -276,7 +322,7 @@ def identify(rows: list[CleanRow], invoices: list[ExtractedInvoice]) -> list[Ide
             else "no other candidate"
         steps.append(f"Best {best.pdf.file} agrees on {len(best.agree)} fields; {runner_up} (rule 4: clear winner)")
         results.append(Identification(**base, status="linked", invoice_file=best.pdf.file, steps=steps,
-                                      evidence=_evidence(cr, best), snips=_snips(best)))
+                                      evidence=_evidence(cr, best, definition), snips=_snips(best, definition)))
         claims.setdefault(best.pdf.file, []).append((len(results) - 1, best))
 
     # One PDF backs one row: contested PDFs stay only with a strictly better row.

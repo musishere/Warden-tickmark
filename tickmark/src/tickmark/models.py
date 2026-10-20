@@ -1,8 +1,11 @@
 from datetime import date
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from tickmark.definitions import INVOICE_VOUCHING
+from tickmark.fields.types import TYPES
 
 
 class BBox(BaseModel):
@@ -75,17 +78,72 @@ class ExtractedInvoice(BaseModel):
         return self.fields.get(name)
 
 
+class Cell(BaseModel):
+    """One Excel cell exactly as received. A row keeps a LIST of these, so duplicate and
+    reordered headers survive."""
+
+    col: str  # column letter, e.g. "C"
+    header: str | None = None  # the header text above it, as written
+    value: Any = None  # JSON-safe: text, number, bool, ISO date string, or None
+    kind: str = "empty"  # the Excel value's Python type: str, int, float, date, datetime, bool, empty
+
+
+class FieldValue(BaseModel):
+    """A mapped, typed value: what the rules read."""
+
+    type: str  # a tickmark.fields.types name
+    value: str  # canonical string ("1234.50", "2026-01-13"); money is never a JSON number
+    col: str | None = None  # the column it came from
+
+
+_LEGACY = ("reference", "vendor", "amount", "invoice_date")
+
+
 class SampleRow(BaseModel):
-    """One row of the auditor's sample: what the ledger says should be backed by an invoice."""
+    """One row of the auditor's sample: what the ledger says should be backed by evidence.
+
+    `fields` holds the typed values its audit definition needs; `raw` the row's cells as received.
+    Constructing it with vendor= / amount= / invoice_date= / reference= (the invoice_vouching
+    fields) still works, and those names read back as properties."""
 
     model_config = ConfigDict(coerce_numbers_to_str=True)
 
     row_id: str  # as the auditor wrote it ("S-01", "7"); the Excel row number if the column is empty
-    vendor: str
-    amount: Decimal
-    invoice_date: date
-    reference: str | None = None
     excel_row: int | None = None  # source row in the workbook, for traceability
+    definition: str = INVOICE_VOUCHING.name
+    fields: dict[str, FieldValue] = Field(default_factory=dict)
+    raw: list[Cell] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_kwargs(cls, data):
+        if isinstance(data, dict) and any(k in data for k in _LEGACY):
+            data = dict(data)
+            fields = dict(data.get("fields") or {})
+            for name in _LEGACY:
+                v = data.pop(name, None)
+                if v is not None:
+                    t = TYPES[INVOICE_VOUCHING.field(name).type]
+                    typed = t.parse(v, name) if isinstance(v, str) else v  # "10.50" -> Decimal, "2025-03-01" -> date
+                    fields[name] = FieldValue(type=t.name, value=t.to_str(typed))
+            data["fields"] = fields
+        return data
+
+    def get(self, name: str):
+        """The typed Python value of a field (Decimal, date, str), or None if absent."""
+        f = self.fields.get(name)
+        return TYPES[f.type].from_str(f.value) if f else None
+
+    def set(self, name: str, value) -> None:
+        """Replace a field's value (tests use it to tamper with a loaded row)."""
+        t = TYPES[INVOICE_VOUCHING.field(name).type] if name not in self.fields else TYPES[self.fields[name].type]
+        col = self.fields[name].col if name in self.fields else None
+        self.fields[name] = FieldValue(type=t.name, value=t.to_str(value), col=col)
+
+    vendor = property(lambda self: self.get("vendor"), lambda self, v: self.set("vendor", v))
+    amount = property(lambda self: self.get("amount"), lambda self, v: self.set("amount", v))
+    invoice_date = property(lambda self: self.get("invoice_date"), lambda self, v: self.set("invoice_date", v))
+    reference = property(lambda self: self.get("reference"), lambda self, v: self.set("reference", v))
 
 
 class InvoiceLabel(BaseModel):
@@ -109,17 +167,22 @@ class SampleLabel(BaseModel):
 class RowError(BaseModel):
     row_number: int  # Excel row number, 1-based
     message: str
+    raw: list[Cell] = Field(default_factory=list)
 
 
 class SkippedRow(BaseModel):
     row_number: int
     reason: str
+    raw: list[Cell] = Field(default_factory=list)
 
 
 class SampleLoadResult(BaseModel):
     rows: list[SampleRow]
     errors: list[RowError]
     skipped: list[SkippedRow] = Field(default_factory=list)
+    sheet: str | None = None  # the sheet's title
+    headers: list[Cell] = Field(default_factory=list)  # the header row, one Cell per column
+    mapping: Any = None  # the ColumnMapping that turned raw cells into fields
 
 
 class CleaningNote(BaseModel):

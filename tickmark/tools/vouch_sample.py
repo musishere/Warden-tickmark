@@ -19,7 +19,14 @@ from tickmark.extract import DocIntExtractor, LabelExtractor
 from tickmark.models import Verdict
 from tickmark.pipeline import run_vouch
 from tickmark.vouch import MARK, VouchPolicy, parse_period
-from tools.identify_sample import build_workbook, pdf_linker, save_workbook, style
+from tools.identify_sample import (
+    add_mapping_sheet,
+    build_workbook,
+    pdf_linker,
+    save_workbook,
+    style,
+)
+from tools.mapping_args import add_mapping_arg, choose_mapping
 from tools.tenant_args import add_tenant_args, tenant_context
 
 RESULT_MARK = {"agrees": "✓", "differs": "✗", "unverifiable": "?", "pass": "✓", "fail": "✗", "warn": "!",
@@ -95,8 +102,10 @@ def main() -> None:
     ap.add_argument("--out", type=Path, help="write verdicts, comparisons and checks to a workbook")
     ap.add_argument("--save", action="store_true", help="store the run (and verdicts) in the audit database")
     add_tenant_args(ap)
+    add_mapping_arg(ap)
     args = ap.parse_args()
     ctx = tenant_context(ap, args) if args.save else None
+    mapping = choose_mapping(args.sample, args.mapping, ctx)
 
     period = parse_period(args.period) if args.period else None
     if period is None and ctx:
@@ -111,11 +120,14 @@ def main() -> None:
 
     started = datetime.now(UTC)
     extractor = LabelExtractor(args.labels) if args.labels else DocIntExtractor()
-    run = run_vouch(args.sample, args.invoices, extractor, policy)
+    run = run_vouch(args.sample, args.invoices, extractor, policy, mapping)
+    if run.loaded.mapping.source != "aliases":
+        print(f"columns mapped by a {run.loaded.mapping.source} mapping confirmed by {run.loaded.mapping.confirmed_by}\n")
     print_verdicts(run.verdicts, args.trace)
     if args.out:
         wb = build_workbook(run.results, run.extracted, args.invoices)
         add_verdict_sheets(wb, run.verdicts, args.invoices)
+        add_mapping_sheet(wb, run.loaded)
         save_workbook(wb, args.out)
         print(f"wrote {args.out}")
     if args.save:

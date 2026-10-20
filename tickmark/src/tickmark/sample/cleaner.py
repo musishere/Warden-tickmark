@@ -2,8 +2,8 @@
 import re
 import unicodedata
 from datetime import date
-from decimal import Decimal
 
+from tickmark.definitions import INVOICE_VOUCHING, Definition
 from tickmark.models import CleanedSample, CleaningNote, CleanRow, SampleRow
 
 LEGAL_SUFFIXES = {
@@ -27,27 +27,37 @@ def normalize_vendor(name: str) -> str:
     return " ".join(tokens) or full
 
 
-def clean_sample(rows: list[SampleRow], period: tuple[date, date] | None = None) -> CleanedSample:
+def clean_sample(rows: list[SampleRow], period: tuple[date, date] | None = None,
+                 definition: Definition = INVOICE_VOUCHING) -> CleanedSample:
+    """Adds the party's matching key and flags, field by field from the definition: a duplicate
+    (same party key + corroborating values as an earlier row), negative or zero money, a date
+    outside the period."""
     cleaned: list[CleanRow] = []
     notes: list[CleaningNote] = []
-    seen: dict[tuple[str, Decimal, date], str] = {}
+    seen: dict[tuple, str] = {}
+    party = definition.by_role("party")[0]
+    corroborating = definition.by_role("corroborating")
+    what = ", ".join([party.label, *(s.label for s in corroborating[:-1])]) + f" and {corroborating[-1].label}"
 
     def flag(cr: CleanRow, rule: str, detail: str) -> None:
         cr.flags.append(rule)
         notes.append(CleaningNote(row_id=cr.row.row_id, rule=rule, detail=detail))
 
     for row in rows:
-        cr = CleanRow(row=row, vendor_key=normalize_vendor(row.vendor))
-        key = (cr.vendor_key, row.amount, row.invoice_date)
+        cr = CleanRow(row=row, vendor_key=normalize_vendor(row.get(party.name)))
+        key = (cr.vendor_key, *(row.get(s.name) for s in corroborating))
         if key in seen:
-            flag(cr, f"duplicate_of:{seen[key]}", f"same vendor, amount and date as row {seen[key]}")
+            flag(cr, f"duplicate_of:{seen[key]}", f"same {what} as row {seen[key]}")
         else:
             seen[key] = row.row_id
-        if row.amount < 0:
-            flag(cr, "negative_amount", f"{row.amount} (credit note?)")
-        elif row.amount == 0:
-            flag(cr, "zero_amount", "amount is 0")
-        if period and not (period[0] <= row.invoice_date <= period[1]):
-            flag(cr, "date_outside_period", f"{row.invoice_date} not in {period[0]}..{period[1]}")
+        for spec in definition.fields:
+            v = row.get(spec.name)
+            if spec.type == "money" and v is not None:
+                if v < 0:
+                    flag(cr, f"negative_{spec.label}", f"{v} (credit note?)")
+                elif v == 0:
+                    flag(cr, f"zero_{spec.label}", f"{spec.label} is 0")
+            elif spec.type == "date" and v is not None and period and not (period[0] <= v <= period[1]):
+                flag(cr, f"{spec.label}_outside_period", f"{v} not in {period[0]}..{period[1]}")
         cleaned.append(cr)
     return CleanedSample(rows=cleaned, notes=notes)
