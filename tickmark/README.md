@@ -3,7 +3,8 @@
 Sample audit agent: vouches invoices against an Excel sample, with every tool
 call going through [Warden](../warden). The LLM extracts; pass/fail is decided in code.
 
-Scope and status: [docs/MVP.md](docs/MVP.md).
+Scope: [docs/MVP.md](docs/MVP.md). What is built, pipeline diagram and how to verify:
+[docs/PROGRESS.md](docs/PROGRESS.md).
 
 ## Layout
 
@@ -43,3 +44,16 @@ python -m tools.clean_sample  data/generated/sample_messy.xlsx data/output/sampl
 python -m tools.verify_clean  data/generated/sample_messy.xlsx data/output/sample_messy_cleaned.xlsx
 python -m tools.compare_sample data/generated/sample_messy.xlsx --labels data/generated/labels/sample_messy_labels.json
 ```
+
+## Which PDF is each row about?
+`tickmark.match.identify` links a row to a PDF only on strong, unique, corroborated evidence:
+invoice number + one more field, or vendor + amount/date; a clear winner; one PDF per row.
+Anything weaker is `needs_review` with the candidates, never a guess.
+```bash
+python -m tools.datagen.hard                 # hard negatives -> data/generated/hard/
+python -m tools.eval_identify --labels       # matching alone (perfect extraction from labels)
+python -m tools.eval_identify                # with Azure Document Intelligence (needs .env)
+python -m tools.identify_sample data/external/tickmark-sample/sample.xlsx \
+    data/external/tickmark-sample/invoices --out data/output/identified.xlsx
+```
+Azure results are cached in `data/cache/docint/` (one call per PDF, ever).

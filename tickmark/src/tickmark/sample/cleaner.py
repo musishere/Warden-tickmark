@@ -30,7 +30,7 @@ def normalize_vendor(name: str) -> str:
 def clean_sample(rows: list[SampleRow], period: tuple[date, date] | None = None) -> CleanedSample:
     cleaned: list[CleanRow] = []
     notes: list[CleaningNote] = []
-    seen: dict[tuple[str, Decimal, date], int] = {}
+    seen: dict[tuple[str, Decimal, date], str] = {}
 
     def flag(cr: CleanRow, rule: str, detail: str) -> None:
         cr.flags.append(rule)

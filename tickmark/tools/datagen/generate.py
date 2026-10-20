@@ -144,10 +144,10 @@ def main() -> None:
         vendor = inv.vendor
         if kind == "no_evidence":
             vendor, amount = "Initech Unlisted Supplies", money(rng.uniform(200, 5000))
-        rows.append(SampleRow(row_id=i, vendor=vendor, amount=amount, invoice_date=inv.invoice_date))
+        rows.append(SampleRow(row_id=str(i), vendor=vendor, amount=amount, invoice_date=inv.invoice_date))
         row_labels.append(
             SampleLabel(
-                row_id=i,
+                row_id=str(i),
                 expected=kind,
                 invoice_file=None if kind == "no_evidence" else lab.file,
                 difference_field="amount" if kind == "difference" else None,
@@ -159,7 +159,7 @@ def main() -> None:
     ws.title = "Sample"
     ws.append(["Row", "Vendor", "Amount", "Date"])
     for r in rows:
-        ws.append([r.row_id, r.vendor, float(r.amount), r.invoice_date])
+        ws.append([int(r.row_id), r.vendor, float(r.amount), r.invoice_date])
     wb.save(args.out / "sample.xlsx")
     (label_dir / "sample_labels.json").write_text(
         json.dumps([r.model_dump(mode="json") for r in row_labels], indent=2)

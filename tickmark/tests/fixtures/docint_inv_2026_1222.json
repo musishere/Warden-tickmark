@@ -1,0 +1,26 @@
+{
+ "_note": "Hand-written in the Azure Document Intelligence AnalyzeResult (as_dict) format for INV-2026-1222.pdf. Replace with a real recorded result from data/cache/docint/ after the first live run.",
+ "apiVersion": "2024-11-30",
+ "modelId": "prebuilt-invoice",
+ "content": "Pinewood IT Solutions BV ...",
+ "pages": [{"pageNumber": 1, "unit": "inch", "width": 8.2639, "height": 11.6944}],
+ "documents": [{
+  "docType": "invoice",
+  "confidence": 1.0,
+  "fields": {
+   "VendorName": {"type": "string", "valueString": "Pinewood IT Solutions BV", "content": "Pinewood IT Solutions BV",
+                  "confidence": 0.94, "boundingRegions": [{"pageNumber": 1, "polygon": [0.69, 0.72, 2.91, 0.72, 2.91, 0.95, 0.69, 0.95]}]},
+   "InvoiceId": {"type": "string", "valueString": "INV-2026-1222", "content": "INV-2026-1222",
+                 "confidence": 0.97, "boundingRegions": [{"pageNumber": 1, "polygon": [6.1, 1.02, 7.4, 1.02, 7.4, 1.18, 6.1, 1.18]}]},
+   "InvoiceDate": {"type": "date", "valueDate": "2026-01-16", "content": "16-01-2026",
+                   "confidence": 0.96, "boundingRegions": [{"pageNumber": 1, "polygon": [6.6, 1.24, 7.4, 1.24, 7.4, 1.4, 6.6, 1.4]}]},
+   "SubTotal": {"type": "currency", "valueCurrency": {"amount": 7092.84, "currencyCode": "EUR"}, "content": "€ 7,092.84",
+                "confidence": 0.93, "boundingRegions": [{"pageNumber": 1, "polygon": [6.4, 4.6, 7.3, 4.6, 7.3, 4.76, 6.4, 4.76]}]},
+   "TotalTax": {"type": "currency", "valueCurrency": {"amount": 1489.5, "currencyCode": "EUR"}, "content": "€ 1,489.50",
+                "confidence": 0.92, "boundingRegions": [{"pageNumber": 1, "polygon": [6.4, 4.82, 7.3, 4.82, 7.3, 4.98, 6.4, 4.98]}]},
+   "InvoiceTotal": {"type": "currency", "valueCurrency": {"amount": 8682.34, "currencyCode": "EUR"}, "content": "€ 8,682.34",
+                    "confidence": 0.95, "boundingRegions": [{"pageNumber": 1, "polygon": [6.4, 5.04, 7.3, 5.04, 7.3, 5.2, 6.4, 5.2]}]},
+   "CustomerName": {"type": "string", "valueString": "Example Client N.V.", "confidence": 0.9}
+  }
+ }]
+}

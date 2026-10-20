@@ -24,14 +24,14 @@ def test_happy_path(tmp_path):
     res = load_sample(p)
     assert res.errors == []
     row = res.rows[0]
-    assert (row.row_id, row.vendor, row.amount, row.invoice_date) == (1, "Acme", Decimal("10.5"), date(2025, 3, 1))
+    assert (row.row_id, row.vendor, row.amount, row.invoice_date) == ("1", "Acme", Decimal("10.5"), date(2025, 3, 1))
 
 
 def test_aliases_and_column_order(tmp_path):
     p = make(tmp_path, [["Invoice Date", "Supplier", "Total"], ["2025-03-01", "Acme", "1,234.50"]])
     row = load_sample(p).rows[0]
     assert row.amount == Decimal("1234.50") and row.invoice_date == date(2025, 3, 1)
-    assert row.row_id == 2  # falls back to the Excel row number
+    assert row.row_id == "2"  # falls back to the Excel row number
 
 
 def test_european_amount(tmp_path):
@@ -76,4 +76,17 @@ def test_generated_sample_matches_labels():
     res = load_sample(xlsx)
     expected = json.loads(labels.read_text())
     assert res.errors == []
-    assert [r.row_id for r in res.rows] == [e["row_id"] for e in expected]
+    assert [r.row_id for r in res.rows] == [str(e["row_id"]) for e in expected]
+
+
+def test_external_headers_and_text_row_ids_are_kept(tmp_path):
+    p = make(tmp_path, [
+        ["Row ID", "Vendor", "Invoice No.", "Invoice Date", "Amount (EUR)"],
+        ["S-01", "Acme B.V.", " INV-2026-1037 ", date(2026, 1, 13), 2999.37],
+        [7.0, "Beta", None, date(2026, 1, 14), 1],
+        [None, "Gamma", "X-1", date(2026, 1, 15), 2],
+    ])
+    res = load_sample(p)
+    assert res.errors == []
+    assert [(r.row_id, r.reference) for r in res.rows] == [
+        ("S-01", "INV-2026-1037"), ("7", None), ("4", "X-1")]

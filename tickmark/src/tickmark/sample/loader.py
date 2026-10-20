@@ -10,11 +10,11 @@ from openpyxl.utils.exceptions import InvalidFileException
 from tickmark.models import RowError, SampleLoadResult, SampleRow, SkippedRow
 
 ALIASES = {
-    "row_id": {"row", "id", "no", "no.", "#"},
-    "vendor": {"vendor", "supplier"},
-    "amount": {"amount", "total"},
+    "row_id": {"row", "row id", "id", "no", "#"},
+    "vendor": {"vendor", "supplier", "vendor name", "supplier name"},
+    "amount": {"amount", "total", "invoice amount", "invoice total"},
     "invoice_date": {"date", "invoice date"},
-    "reference": {"reference", "ref"},
+    "reference": {"reference", "ref", "invoice no", "invoice number", "invoice #", "invoice id"},
 }
 REQUIRED = ("vendor", "amount", "invoice_date")
 FOOTER_WORDS = {"total", "subtotal", "sub total", "grand total", "sum", "totals", "notes", "note"}
@@ -81,10 +81,16 @@ def _footer_label(values: list) -> str | None:
     return None
 
 
+def _header_name(value) -> str:
+    """'Amount (EUR)' -> 'amount', 'Invoice No.' -> 'invoice no', ' Row ID: ' -> 'row id'."""
+    text = re.sub(r"\([^)]*\)", " ", clean_text(value).lower())
+    return " ".join(text.replace(".", " ").replace(":", " ").replace("_", " ").split())
+
+
 def _map_headers(values: list) -> dict[str, int]:
     columns: dict[str, int] = {}
     for idx, v in enumerate(values):
-        name = str(v).strip().lower() if v is not None else ""
+        name = _header_name(v)
         for field, aliases in ALIASES.items():
             if name in aliases and field not in columns:
                 columns[field] = idx
@@ -100,19 +106,21 @@ def _parse_row(number: int, values: list, columns: dict[str, int]) -> SampleRow:
     if not vendor:
         raise ValueError("vendor is empty")
     reference = get("reference")
-    raw_id = get("row_id")
-    try:
-        row_id = int(raw_id) if raw_id not in (None, "") else number
-    except (TypeError, ValueError):
-        row_id = number
     return SampleRow(
-        row_id=row_id,
+        row_id=_parse_row_id(get("row_id"), number),
         vendor=vendor,
         amount=_parse_amount(get("amount")),
         invoice_date=_parse_date(get("invoice_date")),
         reference=clean_text(reference) or None,
         excel_row=number,
     )
+
+
+def _parse_row_id(value, number: int) -> str:
+    """Keep the auditor's id as written; 7.0 from Excel becomes '7'. Empty -> the Excel row number."""
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    return clean_text(value) or str(number)
 
 
 def _parse_amount(value) -> Decimal:

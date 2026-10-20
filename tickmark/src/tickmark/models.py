@@ -1,7 +1,8 @@
 from datetime import date
 from decimal import Decimal
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class BBox(BaseModel):
@@ -42,15 +43,28 @@ class Invoice(BaseModel):
 
 class ExtractedField(BaseModel):
     name: str
-    value: str
+    value: str  # normalised: dates ISO, amounts plain decimal ("2971.36")
     confidence: float | None = None
     snip: Snip | None = None
+
+
+class ExtractedInvoice(BaseModel):
+    """What an extractor read from one PDF. Field names: vendor, invoice_number, invoice_date,
+    total, subtotal, tax. A field the extractor could not read is absent."""
+
+    file: str
+    fields: dict[str, ExtractedField] = Field(default_factory=dict)
+
+    def get(self, name: str) -> ExtractedField | None:
+        return self.fields.get(name)
 
 
 class SampleRow(BaseModel):
     """One row of the auditor's sample: what the ledger says should be backed by an invoice."""
 
-    row_id: int
+    model_config = ConfigDict(coerce_numbers_to_str=True)
+
+    row_id: str  # as the auditor wrote it ("S-01", "7"); the Excel row number if the column is empty
     vendor: str
     amount: Decimal
     invoice_date: date
@@ -68,7 +82,9 @@ class InvoiceLabel(BaseModel):
 
 
 class SampleLabel(BaseModel):
-    row_id: int
+    model_config = ConfigDict(coerce_numbers_to_str=True)
+
+    row_id: str
     expected: str  # matched | difference | no_evidence
     invoice_file: str | None = None
     difference_field: str | None = None
@@ -91,7 +107,9 @@ class SampleLoadResult(BaseModel):
 
 
 class CleaningNote(BaseModel):
-    row_id: int
+    model_config = ConfigDict(coerce_numbers_to_str=True)
+
+    row_id: str
     rule: str
     detail: str
 
@@ -107,3 +125,53 @@ class CleanRow(BaseModel):
 class CleanedSample(BaseModel):
     rows: list[CleanRow]
     notes: list[CleaningNote]
+
+
+class Candidate(BaseModel):
+    """A PDF that might be the one a row is about, and which fields agree."""
+
+    invoice_file: str
+    agree: list[str]  # e.g. ["number", "vendor", "date"]
+    note: str = ""  # why this candidate cannot be linked on its own, if it cannot
+
+
+class PdfField(BaseModel):
+    """One value read from a PDF, and whether matching may use it as evidence."""
+
+    name: str
+    value: str
+    confidence: float | None = None
+    trusted: bool
+    why_not: str = ""
+    snip: Snip | None = None
+
+
+class FieldCheck(BaseModel):
+    """One field of one row compared with one PDF."""
+
+    field: str  # number | vendor | amount | date
+    row_value: str
+    pdf_value: str
+    result: Literal["equal", "similar", "differs", "untrusted", "missing", "not in row"]
+    detail: str = ""  # e.g. "vendor similarity 95", "+25.00", "+3 days", "confidence 0.5"
+
+
+class Comparison(BaseModel):
+    invoice_file: str
+    checks: list[FieldCheck]
+    outcome: str  # "can link", "review only: <why>", "not a candidate"
+
+
+class Identification(BaseModel):
+    """Which PDF a sample row is about. Only 'linked' names a PDF as the row's evidence."""
+
+    row_id: str
+    excel_row: int | None = None
+    status: Literal["linked", "needs_review", "no_evidence"]
+    invoice_file: str | None = None
+    evidence: list[str] = Field(default_factory=list)  # human-readable, e.g. "number INV-1 equal"
+    reason: str = ""  # for needs_review / no_evidence
+    candidates: list[Candidate] = Field(default_factory=list)
+    snips: list[Snip] = Field(default_factory=list)
+    comparisons: list[Comparison] = Field(default_factory=list)  # this row vs every PDF
+    steps: list[str] = Field(default_factory=list)  # the decision, in the order it was made
