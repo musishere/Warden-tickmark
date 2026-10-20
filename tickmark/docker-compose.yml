@@ -8,7 +8,9 @@ services:
       POSTGRES_PASSWORD: tickmark
       POSTGRES_DB: tickmark
     ports: ["5435:5432"]
-    volumes: [tickmark-pgdata:/var/lib/postgresql/data]
+    volumes:
+      - tickmark-pgdata:/var/lib/postgresql/data
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro  # creates the tickmark_app role on first start
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U tickmark -d tickmark"]
       interval: 2s

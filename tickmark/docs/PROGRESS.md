@@ -34,8 +34,8 @@ flowchart LR
     end
 
     subgraph S4["4 · Audit trail (--save)"]
-        DB[("Postgres (append-only)<br/>runs · documents · extractions · sample_rows<br/>sample_issues · match_results · reviews")]
-        ES[("evidence store<br/>data/store/&lt;sha256&gt;")]
+        DB[("Postgres (append-only, row-level security per firm + engagement)<br/>runs · documents · extractions · sample_rows<br/>sample_issues · match_results · reviews")]
+        ES[("evidence store<br/>data/store/&lt;firm&gt;/&lt;engagement&gt;/&lt;sha256&gt;")]
         H["human review<br/>tools.review"]
     end
 
@@ -170,10 +170,12 @@ The eval exits with an error on any wrong link, so it can gate CI.
 In audit the result is half of it: you must also show, months later, **what was decided, from
 which exact files, under which rules, and what a human did with it**. With `--save`, a run is
 stored completely (one transaction) in Tickmark's own Postgres database. Warden keeps its own
-database, and `engagement_id` is Warden's id.
+database; tenant and engagement ids are Warden's.
 
 | Table | Holds |
 |---|---|
+| `tenants` | audit firms (Warden's id, name, Entra tenant id). Registry only, written by the owner role |
+| `engagements` | the clients each firm audits (Warden's id, firm, client name). Registry only |
 | `runs` | when, who, engagement, matcher version (git commit), thresholds, extractor + model, completed/failed + error |
 | `documents` | every file by **SHA-256** (sample and PDFs), size, pages, path in the evidence store |
 | `run_documents` | which PDFs this run compared against, and under which file name |
@@ -187,19 +189,39 @@ Rules:
 - **Append-only, enforced by Postgres**: a trigger rejects UPDATE, DELETE and TRUNCATE on every
   table. A re-run is a new run. A human decision is a new review, and the latest one is current.
 - **Linked by hash and id, not by file name**: the same bytes under two names are one document.
-- **Evidence store**: each file used is copied once to `data/store/<sha[:2]>/<sha256>.<ext>` and
-  never overwritten. `verify_run` re-hashes it. (It stands in for Azure Blob Storage.)
+- **Evidence store**: each file used is copied once to
+  `data/store/<tenant>/<engagement>/<sha[:2]>/<sha256>.<ext>` and never overwritten. `verify_run`
+  re-hashes it. (It stands in for Azure Blob Storage.)
 - **The rules stay in code**: the database records what happened; `tickmark.match` decides.
 - The schema is managed by Alembic (`migrations/`); `alembic check` confirms the code and the
   migrations agree.
+
+#### Multi-tenant: many audit firms, many clients
+**Tenant = audit firm** (from the verified Entra token in production). **Engagement = one client
+company** the firm audits. Every audit row carries `tenant_id` + `engagement_id`, and Postgres
+enforces the separation, not just the code:
+
+| Layer | What it does |
+|---|---|
+| **Row-level security** on all 10 tables | A session sees and can insert only rows of the tenant **and** engagement it set (`app.tenant_id`, `app.engagement_id`, transaction-local). **Fail closed**: nothing set → nothing visible, nothing writable. |
+| **Composite foreign keys** `(tenant_id, engagement_id, id)` | A result, review or file link can only point at rows of the same engagement, even with forged ids. |
+| **Two database roles** | `tickmark` (owner) runs migrations and registers firms and engagements. The app connects as **`tickmark_app`**: `SELECT` + `INSERT` only, not the owner, so it cannot update, delete, truncate, drop triggers or switch off row-level security. |
+| **Per-engagement files** | The same PDF in two engagements is stored twice (separate documents, separate evidence folders), so an ethical wall (Coke vs Pepsi in one firm) also holds for storage. |
+| **"No run", not "forbidden"** | A run of another firm or engagement looks like it does not exist. |
+
+In code, every store call takes a `TenantContext(tenant_id, engagement_id, user)`
+(`src/tickmark/store/context.py`); `scoped()` sets it at the start of the transaction. The
+tests (`tests/test_tenancy.py`) include `tenant_a_cannot_read_tenant_b`, the ethical wall,
+fail-closed, forged ids, cross-engagement links, and everything the app role must not be able to do.
 
 ### 9. Project layout
 ```
 src/tickmark/   app: api/, sample/ (loader, cleaner), extract/, match/, store/, checks/, pipeline.py, models.py
 tools/          datagen/, clean_sample, compare_sample, verify_clean, identify_sample, eval_identify,
-                show_run, review, verify_run
-migrations/     Alembic: tables, constraints, append-only triggers
-tests/          67 tests (16 need Postgres and skip cleanly without it)
+                show_run, review, verify_run, tenants (register firms + engagements)
+migrations/     Alembic: 0001 audit tables + append-only triggers, 0002 multi-tenant (RLS, roles)
+docker/initdb/  creates the tickmark_app login role on a fresh dev database
+tests/          82 tests (31 need Postgres and skip cleanly without it)
 data/           external/ (given), generated/, output/, cache/, store/   (gitignored)
 docs/           MVP.md, PROGRESS.md
 ```
@@ -224,11 +246,18 @@ Audit database (Tickmark's own Postgres, host port 5435):
 docker compose up -d                 # start Postgres
 alembic upgrade head                 # create / upgrade the tables
 
+# register an audit firm and a client engagement (owner role); prints their ids
+python -m tools.tenants add-tenant "Firm A"
+python -m tools.tenants add-engagement <tenant id> "Coke"
+python -m tools.tenants list
+
+# act inside one firm + engagement (or pass --tenant / --engagement each time)
+export TICKMARK_TENANT=<tenant id> TICKMARK_ENGAGEMENT=<engagement id>
 python -m tools.identify_sample data/external/tickmark-sample/sample.xlsx \
-    data/external/tickmark-sample/invoices --save --engagement ENG-1     # prints the run id
-python -m tools.show_run                                 # list runs
+    data/external/tickmark-sample/invoices --save                        # prints the run id
+python -m tools.show_run                                 # this engagement's runs
 python -m tools.show_run RUN_ID --trace --out data/output/run.xlsx       # rebuilt from the DB only
-python -m tools.review RUN_ID S-02 --decision accept --reviewer ali --note "checked"
+python -m tools.review RUN_ID S-02 --decision accept --note "checked"    # reviewer = --user (OS user)
 python -m tools.verify_run RUN_ID                        # files unchanged, every row accounted for
 ```
 
@@ -256,5 +285,8 @@ Two separate questions:
 | Warden | PDF reads are not yet routed through `WardenClient` (fail closed). |
 | API | `POST /engagements/{id}/vouch` and `GET …/runs/{runId}` are not built yet. They will read from the audit store. |
 | Review UI | Reviews are recorded with `tools.review`; no screen yet. |
-| DB hardening | The app should connect as a role with INSERT/SELECT only (today it owns the tables, so it could drop the triggers). Move the evidence store to Azure Blob Storage with immutability. |
+| Tenant from the token | The API must take tenant and engagement from the Warden-verified token, never from the request. The CLI flags are stand-ins. |
+| Registry sync | `tenants` / `engagements` are registered by hand; sync them from Warden. |
+| Retention / deletion | Append-only plus per-firm deletion requests need a legal-hold design. |
+| Evidence storage | Move the evidence store to Azure Blob Storage, a container per tenant, with immutability. |
 | Larger eval set | 34 rows is too few to trust a "100%". Grow it towards the 50–100 invoices planned in MVP.md. |

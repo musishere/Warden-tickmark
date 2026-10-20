@@ -1,5 +1,5 @@
-"""Alembic environment. The database URL comes from TICKMARK_DATABASE_URL (settings) unless the
-caller set sqlalchemy.url (tests point it at a throw-away database)."""
+"""Alembic environment. Migrations run as the owner: TICKMARK_ADMIN_DATABASE_URL (settings) unless
+the caller set sqlalchemy.url (tests point it at a throw-away database)."""
 from logging.config import fileConfig
 
 from alembic import context
@@ -13,7 +13,7 @@ if config.config_file_name is not None and config.attributes.get("configure_logg
     fileConfig(config.config_file_name)
 
 target_metadata = metadata
-url = config.get_main_option("sqlalchemy.url") or settings.database_url
+url = config.get_main_option("sqlalchemy.url") or settings.admin_database_url
 
 
 def run_migrations_offline() -> None:

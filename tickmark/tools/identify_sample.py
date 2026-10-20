@@ -7,7 +7,8 @@
 
 Without --labels, PDFs are read with Azure Document Intelligence (cached in data/cache/docint).
 
---save stores the run in the audit database (see tools.show_run, tools.review, tools.verify_run).
+--save stores the run in the audit database, in one firm's engagement (--tenant/--engagement, see
+tools.tenant_args). Then: tools.show_run, tools.review, tools.verify_run.
 
 --trace prints the whole process: what was read from each PDF (and what is not trusted, and why),
 each row compared field by field with every PDF that agrees on anything, and the decision steps.
@@ -18,7 +19,6 @@ each row compared field by field with every PDF that agrees on anything, and the
   PDF fields   everything read from each PDF, confidence, trusted or why not, page + position
 """
 import argparse
-import getpass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -29,6 +29,7 @@ from tickmark.extract import DocIntExtractor, LabelExtractor
 from tickmark.match.identify import pdf_fields
 from tickmark.models import ExtractedInvoice, Identification
 from tickmark.pipeline import IdentificationRun, run_identification
+from tools.tenant_args import add_tenant_args, tenant_context
 
 MARK = {"linked": "🔗", "needs_review": "👀", "no_evidence": "❓"}
 RESULT_MARK = {"equal": "✓", "similar": "≈", "differs": "✗", "untrusted": "⚠", "missing": "∅",
@@ -177,9 +178,9 @@ def main() -> None:
     ap.add_argument("--trace", action="store_true", help="print every step of the process")
     ap.add_argument("--out", type=Path, help="write the results and the full trace to a workbook")
     ap.add_argument("--save", action="store_true", help="store the run in the audit database")
-    ap.add_argument("--engagement", help="Warden engagement id to file the run under")
-    ap.add_argument("--run-by", default=getpass.getuser(), help="who ran it (default: OS user)")
+    add_tenant_args(ap)
     args = ap.parse_args()
+    ctx = tenant_context(ap, args) if args.save else None
     started = datetime.now(UTC)
     try:
         r = run_full(args.sample, args.invoices, args.labels)
@@ -187,8 +188,8 @@ def main() -> None:
         if args.save:
             from tickmark.store import save_failed_run
 
-            run_id = save_failed_run(sample_path=args.sample, run_by=args.run_by, started_at=started,
-                                     engagement_id=args.engagement, error=f"{type(e).__name__}: {e}",
+            run_id = save_failed_run(ctx, sample_path=args.sample, started_at=started,
+                                     error=f"{type(e).__name__}: {e}",
                                      extractor="labels" if args.labels else "azure-docint")
             print(f"run failed; recorded as {run_id}")
         raise
@@ -200,9 +201,11 @@ def main() -> None:
     if args.save:
         from tickmark.store import save_run
 
-        run_id = save_run(r, run_by=args.run_by, started_at=started, engagement_id=args.engagement)
-        print(f"saved run {run_id}\n  show:   python -m tools.show_run {run_id} --trace"
-              f"\n  verify: python -m tools.verify_run {run_id}")
+        run_id = save_run(r, ctx, started_at=started)
+        scope = f"--tenant {ctx.tenant_id} --engagement {ctx.engagement_id}"
+        print(f"saved run {run_id} (tenant {ctx.tenant_id}, engagement {ctx.engagement_id})"
+              f"\n  show:   python -m tools.show_run {run_id} {scope} --trace"
+              f"\n  verify: python -m tools.verify_run {run_id} {scope}")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ compared with the database. Stand-in for Azure Blob Storage.
 import hashlib
 import shutil
 from pathlib import Path
+from uuid import UUID
 
 from tickmark.config import settings
 
@@ -18,11 +19,15 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def put(path: Path, root: Path | None = None) -> tuple[str, Path]:
-    """Copy a file into the store (once). Returns (sha256, stored path)."""
+def put(path: Path, tenant_id: UUID, engagement_id: UUID, root: Path | None = None) -> tuple[str, Path]:
+    """Copy a file into the engagement's part of the store (once). Returns (sha256, stored path).
+
+    Layout: <root>/<tenant>/<engagement>/<sha[:2]>/<sha>.<ext>. Nothing is shared across
+    engagements, so an ethical wall also holds for files."""
     path = Path(path)
     sha = sha256_file(path)
-    dest = Path(root or settings.evidence_dir) / sha[:2] / f"{sha}{path.suffix.lower()}"
+    dest = (Path(root or settings.evidence_dir) / str(tenant_id) / str(engagement_id) / sha[:2]
+            / f"{sha}{path.suffix.lower()}")
     if not dest.exists():
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_suffix(dest.suffix + ".part")

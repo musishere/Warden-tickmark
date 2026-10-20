@@ -1,4 +1,5 @@
-"""Write one identification run to the audit database, completely or not at all."""
+"""Write one identification run to the audit database, completely or not at all, inside one
+tenant + engagement (see tickmark.store.context)."""
 import hashlib
 import json
 import subprocess
@@ -16,7 +17,7 @@ from tickmark.match.identify import THRESHOLDS
 from tickmark.models import ExtractedInvoice, Identification
 from tickmark.pipeline import IdentificationRun
 from tickmark.store import evidence
-from tickmark.store.db import engine as default_engine
+from tickmark.store.context import TenantContext, scoped
 from tickmark.store.schema import (
     documents,
     extractions,
@@ -65,19 +66,26 @@ def canonical_sha256(data) -> str:
                           .encode()).hexdigest()
 
 
-def _document(conn: Connection, path: Path, kind: str, pages: int | None = None) -> UUID:
-    sha, stored = evidence.put(path)
-    conn.execute(insert(documents).values(sha256=sha, kind=kind, size_bytes=Path(path).stat().st_size,
+def _scope(ctx: TenantContext) -> dict:
+    return {"tenant_id": ctx.tenant_id, "engagement_id": ctx.engagement_id}
+
+
+def _document(conn: Connection, ctx: TenantContext, path: Path, kind: str, pages: int | None = None) -> UUID:
+    """The file, by hash, within this engagement (never shared with another engagement)."""
+    sha, stored = evidence.put(path, ctx.tenant_id, ctx.engagement_id)
+    conn.execute(insert(documents).values(**_scope(ctx), sha256=sha, kind=kind, size_bytes=Path(path).stat().st_size,
                                           pages=pages, storage_path=str(stored))
-                 .on_conflict_do_nothing(index_elements=["sha256"]))
-    return conn.execute(select(documents.c.id).where(documents.c.sha256 == sha)).scalar_one()
+                 .on_conflict_do_nothing(constraint="documents_once_per_engagement"))
+    return conn.execute(select(documents.c.id).where(
+        documents.c.tenant_id == ctx.tenant_id, documents.c.engagement_id == ctx.engagement_id,
+        documents.c.sha256 == sha)).scalar_one()
 
 
-def _extraction(conn: Connection, document_id: UUID, inv: ExtractedInvoice) -> UUID:
+def _extraction(conn: Connection, ctx: TenantContext, document_id: UUID, inv: ExtractedInvoice) -> UUID:
     raw = inv.raw if inv.raw is not None else {}
-    values = {"document_id": document_id, "extractor": inv.extractor or "unknown", "model_id": inv.model_id,
-                  "api_version": inv.api_version, "raw_sha256": canonical_sha256(raw), "raw": raw,
-                  "fields": {k: f.model_dump(mode="json") for k, f in inv.fields.items()}}
+    values = {**_scope(ctx), "document_id": document_id, "extractor": inv.extractor or "unknown",
+              "model_id": inv.model_id, "api_version": inv.api_version, "raw_sha256": canonical_sha256(raw),
+              "raw": raw, "fields": {k: f.model_dump(mode="json") for k, f in inv.fields.items()}}
     conn.execute(insert(extractions).values(**values).on_conflict_do_nothing(constraint="extractions_once"))
     return conn.execute(select(extractions.c.id).where(
         extractions.c.document_id == document_id, extractions.c.extractor == values["extractor"],
@@ -97,24 +105,25 @@ def _result_values(r: Identification, run_id: UUID, sample_row_id: UUID, doc_ids
         "document_id": doc_ids[r.invoice_file] if r.invoice_file else None,
         "page": r.snips[0].page if r.snips else None,
         "evidence": {"invoice_file": r.invoice_file, "lines": r.evidence,
-                  "snips": [s.model_dump(mode="json") for s in r.snips]},
+                     "snips": [s.model_dump(mode="json") for s in r.snips]},
         "candidates": [{**c.model_dump(mode="json"), "document_id": str(doc_ids[c.invoice_file])}
-                    for c in r.candidates],
+                       for c in r.candidates],
         "reason": r.reason,
         "comparisons": [c.model_dump(mode="json") for c in r.comparisons],
         "steps": r.steps,
     }
 
 
-def save_run(run: IdentificationRun, *, run_by: str, started_at: datetime, engagement_id: str | None = None,
-             db: Engine | None = None) -> UUID:
-    """Store a finished run: documents (by hash), extractions, rows, issues, results. One transaction."""
+def save_run(run: IdentificationRun, ctx: TenantContext, *, started_at: datetime, db: Engine | None = None) -> UUID:
+    """Store a finished run in ctx's engagement: documents (by hash), extractions, rows, issues,
+    results. One transaction: all of it or nothing."""
     sheet, raw = raw_cells_by_row(run.sample_path)
     model_ids = sorted({inv.model_id for inv in run.extracted if inv.model_id})
-    with (db or default_engine()).begin() as conn:
-        sample_doc = _document(conn, run.sample_path, "sample")
+    scope = _scope(ctx)
+    with scoped(ctx, db) as conn:
+        sample_doc = _document(conn, ctx, run.sample_path, "sample")
         run_id = conn.execute(runs.insert().values(
-            engagement_id=engagement_id, run_by=run_by, started_at=started_at,
+            **scope, run_by=ctx.user, started_at=started_at,
             finished_at=datetime.now(UTC), status="completed", sample_document_id=sample_doc,
             sheet=sheet, matcher_version=matcher_version(), thresholds=THRESHOLDS,
             extractor=",".join(sorted({inv.extractor for inv in run.extracted})) or "none",
@@ -123,39 +132,40 @@ def save_run(run: IdentificationRun, *, run_by: str, started_at: datetime, engag
 
         doc_ids: dict[str, UUID] = {}
         for path, inv in zip(run.invoice_files, run.extracted, strict=True):
-            doc_id = _document(conn, path, "pdf", _pages(inv))
+            doc_id = _document(conn, ctx, path, "pdf", _pages(inv))
             doc_ids[inv.file] = doc_id
-            conn.execute(run_documents.insert().values(run_id=run_id, document_id=doc_id, file_name=inv.file,
-                                                       extraction_id=_extraction(conn, doc_id, inv)))
+            conn.execute(run_documents.insert().values(**scope, run_id=run_id, document_id=doc_id, file_name=inv.file,
+                                                       extraction_id=_extraction(conn, ctx, doc_id, inv)))
 
         row_ids: dict[int, UUID] = {}
         flags = {cr.row.excel_row: cr for cr in run.cleaned.rows}
         for row in run.loaded.rows:
             cr = flags[row.excel_row]
             row_ids[row.excel_row] = conn.execute(sample_rows.insert().values(
-                run_id=run_id, row_id=row.row_id, excel_row=row.excel_row, vendor=row.vendor,
+                **scope, run_id=run_id, row_id=row.row_id, excel_row=row.excel_row, vendor=row.vendor,
                 amount=row.amount, invoice_date=row.invoice_date, reference=row.reference,
                 vendor_key=cr.vendor_key, flags=cr.flags, raw_cells=raw.get(row.excel_row, []),
             ).returning(sample_rows.c.id)).scalar_one()
         issues = [(e.row_number, "error", e.message) for e in run.loaded.errors]
         issues += [(s.row_number, "skipped", s.reason) for s in run.loaded.skipped]
         for n, kind, reason in issues:
-            conn.execute(sample_issues.insert().values(run_id=run_id, excel_row=n, kind=kind, reason=reason,
+            conn.execute(sample_issues.insert().values(**scope, run_id=run_id, excel_row=n, kind=kind, reason=reason,
                                                        raw_cells=raw.get(n, [])))
 
         for r in run.results:
-            conn.execute(match_results.insert().values(**_result_values(r, run_id, row_ids[r.excel_row], doc_ids)))
+            conn.execute(match_results.insert().values(
+                **scope, **_result_values(r, run_id, row_ids[r.excel_row], doc_ids)))
     return run_id
 
 
-def save_failed_run(*, sample_path: Path | None, run_by: str, started_at: datetime, error: str,
-                    engagement_id: str | None = None, extractor: str = "unknown",
-                    db: Engine | None = None) -> UUID:
+def save_failed_run(ctx: TenantContext, *, sample_path: Path | None, started_at: datetime, error: str,
+                    extractor: str = "unknown", db: Engine | None = None) -> UUID:
     """A run that crashed is still recorded, with what is known about it."""
-    with (db or default_engine()).begin() as conn:
-        sample_doc = _document(conn, sample_path, "sample") if sample_path and Path(sample_path).is_file() else None
+    with scoped(ctx, db) as conn:
+        sample_doc = (_document(conn, ctx, sample_path, "sample")
+                      if sample_path and Path(sample_path).is_file() else None)
         return conn.execute(runs.insert().values(
-            engagement_id=engagement_id, run_by=run_by, started_at=started_at,
+            **_scope(ctx), run_by=ctx.user, started_at=started_at,
             finished_at=datetime.now(UTC), status="failed", error=error,
             sample_document_id=sample_doc, matcher_version=matcher_version(), thresholds=THRESHOLDS,
             extractor=extractor,

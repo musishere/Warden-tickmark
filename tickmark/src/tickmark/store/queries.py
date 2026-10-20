@@ -1,4 +1,5 @@
-"""Read runs back from the audit database, and append human reviews."""
+"""Read runs back from the audit database, and append human reviews. Always within one tenant +
+engagement: a run of another tenant or engagement is simply "no run", not "access denied"."""
 from dataclasses import dataclass, field
 from uuid import UUID
 
@@ -12,7 +13,7 @@ from tickmark.models import (
     Identification,
     Snip,
 )
-from tickmark.store.db import engine as default_engine
+from tickmark.store.context import TenantContext, scoped
 from tickmark.store.schema import (
     documents,
     extractions,
@@ -47,14 +48,22 @@ class StoredRun:
     reviews: dict[str, list[Review]] = field(default_factory=dict)  # by row_id, oldest first
 
 
-def list_runs(db: Engine | None = None, limit: int = 20) -> list[dict]:
-    with (db or default_engine()).connect() as conn:
+def _run_uuid(run_id: UUID | str) -> UUID:
+    try:
+        return UUID(str(run_id))
+    except ValueError:
+        raise KeyError(f"no run {run_id}") from None
+
+
+def list_runs(ctx: TenantContext, db: Engine | None = None, limit: int = 20) -> list[dict]:
+    with scoped(ctx, db) as conn:
         rows = conn.execute(select(runs).order_by(runs.c.started_at.desc()).limit(limit)).mappings()
         return [dict(r) for r in rows]
 
 
-def get_run(run_id: UUID | str, db: Engine | None = None) -> StoredRun:
-    with (db or default_engine()).connect() as conn:
+def get_run(ctx: TenantContext, run_id: UUID | str, db: Engine | None = None) -> StoredRun:
+    run_id = _run_uuid(run_id)
+    with scoped(ctx, db) as conn:
         run = conn.execute(select(runs).where(runs.c.id == run_id)).mappings().one_or_none()
         if run is None:
             raise KeyError(f"no run {run_id}")
@@ -98,12 +107,13 @@ def get_run(run_id: UUID | str, db: Engine | None = None) -> StoredRun:
     return StoredRun(dict(run), dict(sample) if sample else {}, files, extracted, results, issues, by_row)
 
 
-def add_review(run_id: UUID | str, row_id: str, *, reviewer: str, decision: str,
+def add_review(ctx: TenantContext, run_id: UUID | str, row_id: str, *, decision: str,
                chosen_file: str | None = None, note: str = "", db: Engine | None = None) -> UUID:
-    """Append a human decision for one row of a run. Never changes the tool's result."""
+    """Append ctx.user's decision for one row of a run. Never changes the tool's result."""
     if decision not in DECISIONS:
         raise ValueError(f"decision must be one of {', '.join(DECISIONS)}")
-    with (db or default_engine()).begin() as conn:
+    run_id = _run_uuid(run_id)
+    with scoped(ctx, db) as conn:
         found = conn.execute(
             select(match_results.c.id).join(sample_rows, sample_rows.c.id == match_results.c.sample_row_id)
             .where(match_results.c.run_id == run_id, sample_rows.c.row_id == row_id)).scalars().all()
@@ -116,5 +126,6 @@ def add_review(run_id: UUID | str, row_id: str, *, reviewer: str, decision: str,
             if chosen is None:
                 raise KeyError(f"{chosen_file!r} was not part of run {run_id}")
         return conn.execute(reviews.insert().values(
-            match_result_id=found[0], reviewer=reviewer, decision=decision, chosen_document_id=chosen, note=note,
+            tenant_id=ctx.tenant_id, engagement_id=ctx.engagement_id, match_result_id=found[0],
+            reviewer=ctx.user, decision=decision, chosen_document_id=chosen, note=note,
         ).returning(reviews.c.id)).scalar_one()

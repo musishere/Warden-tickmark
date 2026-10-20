@@ -25,7 +25,9 @@ tools/                 developer tooling, not shipped
   identify_sample.py   row -> PDF, with --trace, --out workbook, --save to the audit DB
   eval_identify.py     wrong links (must be 0), per dataset
   show_run.py review.py verify_run.py   read a stored run, add a human review, verify evidence
-migrations/            Alembic: audit tables + append-only triggers
+  tenants.py           register audit firms (tenants) and client engagements
+migrations/            Alembic: audit tables, append-only triggers, multi-tenant row-level security
+docker/initdb/         creates the tickmark_app database role (dev)
 tests/                 pytest, one file per area
 evals/                 eval set and scoring (to do)
 docs/                  scope and design notes
@@ -66,12 +68,18 @@ python -m tools.identify_sample data/external/tickmark-sample/sample.xlsx \
 ```
 Azure results are cached in `data/cache/docint/` (one call per PDF, ever).
 
-## Audit trail
+## Audit trail (multi-tenant)
 `--save` stores a run in Postgres (append-only): the files by hash, what was read, every row,
-every result with its full trace, and human reviews. See [docs/PROGRESS.md](docs/PROGRESS.md) §8.
+every result with its full trace, and human reviews. Every row belongs to one **audit firm
+(tenant)** and one **client engagement**; Postgres row-level security keeps them apart, and the
+app connects as `tickmark_app` (read + append only). See [docs/PROGRESS.md](docs/PROGRESS.md) §8.
 ```bash
-python -m tools.identify_sample SAMPLE.xlsx INVOICE_DIR --save --engagement ENG-1
+python -m tools.tenants add-tenant "Firm A"              # prints the tenant id
+python -m tools.tenants add-engagement <tenant id> "Coke" # prints the engagement id
+export TICKMARK_TENANT=<tenant id> TICKMARK_ENGAGEMENT=<engagement id>
+
+python -m tools.identify_sample SAMPLE.xlsx INVOICE_DIR --save
 python -m tools.show_run RUN_ID --trace --out data/output/run.xlsx
-python -m tools.review RUN_ID S-02 --decision accept --reviewer ali
+python -m tools.review RUN_ID S-02 --decision accept
 python -m tools.verify_run RUN_ID
 ```

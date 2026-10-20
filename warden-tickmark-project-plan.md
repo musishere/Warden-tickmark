@@ -154,11 +154,16 @@ flowchart LR
 | `credit_ledger` | id, tenant_id, user_id, agent_id, type, amount, reservation_id, idempotency_key UNIQUE |
 | `audit_log` | id, tenant_id, actor_agent, on_behalf_of, action, resource, decision, reason, created_at |
 
-**PostgreSQL (Tickmark, separate database; append-only, enforced by triggers)**
+**PostgreSQL (Tickmark, separate database; append-only, enforced by triggers; multi-tenant)**
+
+Every audit table also has `tenant_id` + `engagement_id` (Warden's ids). Row-level security limits
+each session to one tenant + engagement (fail closed), composite foreign keys stop cross-engagement
+links, files are de-duplicated per engagement only, and the app role can only SELECT + INSERT.
 
 | Table | Key columns |
 |---|---|
-| `documents` | id, sha256 UNIQUE, kind (pdf / sample), size_bytes, pages, storage_path |
+| `tenants` / `engagements` | registry of Warden's ids (firm; client per firm), written by the owner role only |
+| `documents` | id, sha256 (UNIQUE per engagement), kind (pdf / sample), size_bytes, pages, storage_path |
 | `extractions` | document_id, extractor, model_id, raw (JSONB), fields: `{ name: { value, confidence, snip: { page, bbox, text } } }` |
 | `runs` | id, engagement_id (Warden's), run_by, started_at, status, matcher_version, thresholds |
 | `run_documents` | run_id, file_name, document_id, extraction_id |

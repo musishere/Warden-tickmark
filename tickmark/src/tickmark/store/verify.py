@@ -5,16 +5,16 @@ from uuid import UUID
 from sqlalchemy import Engine, select
 
 from tickmark.sample import load_sample
-from tickmark.store.db import engine as default_engine
+from tickmark.store.context import TenantContext, scoped
 from tickmark.store.evidence import sha256_file
 from tickmark.store.queries import get_run
 from tickmark.store.record import canonical_sha256
 from tickmark.store.schema import extractions, sample_rows
 
 
-def verify_run(run_id: UUID | str, db: Engine | None = None) -> list[str]:
-    db = db or default_engine()
-    stored = get_run(run_id, db)
+def verify_run(ctx: TenantContext, run_id: UUID | str, db: Engine | None = None) -> list[str]:
+    stored = get_run(ctx, run_id, db)
+    run_id = stored.run["id"]
     problems: list[str] = []
 
     # 1. every file still has the bytes the run used
@@ -26,7 +26,7 @@ def verify_run(run_id: UUID | str, db: Engine | None = None) -> list[str]:
         elif sha256_file(Path(path)) != sha:
             problems.append(f"{name}: stored file changed (sha256 no longer {sha[:12]}…)")
 
-    with db.connect() as conn:
+    with scoped(ctx, db) as conn:
         # 2. what the extractor returned is unchanged
         ids = [f["extraction_id"] for f in stored.files]
         for e in conn.execute(select(extractions.c.id, extractions.c.raw, extractions.c.raw_sha256)
