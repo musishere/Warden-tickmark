@@ -1,6 +1,6 @@
 """Generate synthetic invoices (PDF), labels (JSON) and the auditor's sample (xlsx).
 
-    python -m data_gen.generate --count 20 --seed 1
+    python -m tools.datagen.generate --count 20 --seed 1 [--messy]
 """
 import argparse
 import json
@@ -13,8 +13,9 @@ from openpyxl import Workbook
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 
-from data_gen.vendors import INJECTION_TEXT, LINE_ITEMS, VENDORS
 from tickmark.models import Invoice, InvoiceLabel, LineItem, SampleLabel, SampleRow
+from tools.datagen.messy import write_messy_sample
+from tools.datagen.vendors import INJECTION_TEXT, LINE_ITEMS, VENDORS
 
 PERIOD = (date(2025, 1, 1), date(2025, 12, 31))
 VAT_RATE = Decimal("0.21")
@@ -107,7 +108,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--count", type=int, default=20)
     ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--out", type=Path, default=Path("data"))
+    ap.add_argument("--out", type=Path, default=Path("data/generated"))
+    ap.add_argument("--messy", action="store_true", help="also write sample_messy.xlsx")
     args = ap.parse_args()
 
     rng = random.Random(args.seed)
@@ -163,6 +165,9 @@ def main() -> None:
         json.dumps([r.model_dump(mode="json") for r in row_labels], indent=2)
     )
     print(f"wrote {len(labels)} invoices and {len(rows)} sample rows to {args.out}/")
+    if args.messy:
+        n = write_messy_sample(args.out)
+        print(f"wrote sample_messy.xlsx with {n} data rows to {args.out}/")
 
 
 if __name__ == "__main__":

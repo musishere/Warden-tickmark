@@ -70,9 +70,9 @@ def test_missing_file(tmp_path):
 
 
 def test_generated_sample_matches_labels():
-    xlsx, labels = Path("data/sample.xlsx"), Path("data/labels/sample_labels.json")
+    xlsx, labels = Path("data/generated/sample.xlsx"), Path("data/generated/labels/sample_labels.json")
     if not (xlsx.exists() and labels.exists()):
-        pytest.skip("run python -m data_gen.generate first")
+        pytest.skip("run python -m tools.datagen.generate first")
     res = load_sample(xlsx)
     expected = json.loads(labels.read_text())
     assert res.errors == []

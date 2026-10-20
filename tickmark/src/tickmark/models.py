@@ -55,6 +55,7 @@ class SampleRow(BaseModel):
     amount: Decimal
     invoice_date: date
     reference: str | None = None
+    excel_row: int | None = None  # source row in the workbook, for traceability
 
 
 class InvoiceLabel(BaseModel):
@@ -78,6 +79,31 @@ class RowError(BaseModel):
     message: str
 
 
+class SkippedRow(BaseModel):
+    row_number: int
+    reason: str
+
+
 class SampleLoadResult(BaseModel):
     rows: list[SampleRow]
     errors: list[RowError]
+    skipped: list[SkippedRow] = Field(default_factory=list)
+
+
+class CleaningNote(BaseModel):
+    row_id: int
+    rule: str
+    detail: str
+
+
+class CleanRow(BaseModel):
+    """A sample row as loaded, plus derived values. The original row is never modified."""
+
+    row: SampleRow
+    vendor_key: str
+    flags: list[str] = Field(default_factory=list)
+
+
+class CleanedSample(BaseModel):
+    rows: list[CleanRow]
+    notes: list[CleaningNote]

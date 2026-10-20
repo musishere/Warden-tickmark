@@ -7,7 +7,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
 
-from tickmark.models import RowError, SampleLoadResult, SampleRow
+from tickmark.models import RowError, SampleLoadResult, SampleRow, SkippedRow
 
 ALIASES = {
     "row_id": {"row", "id", "no", "no.", "#"},
@@ -17,6 +17,8 @@ ALIASES = {
     "reference": {"reference", "ref"},
 }
 REQUIRED = ("vendor", "amount", "invoice_date")
+FOOTER_WORDS = {"total", "subtotal", "sub total", "grand total", "sum", "totals", "notes", "note"}
+ZERO_WIDTH = dict.fromkeys(map(ord, "​‌‍﻿"))
 
 
 class SampleFormatError(Exception):
@@ -50,14 +52,33 @@ def load_sample(path: str | Path, sheet: str | None = None) -> SampleLoadResult:
 
     rows: list[SampleRow] = []
     errors: list[RowError] = []
+    skipped: list[SkippedRow] = []
     for number, values in rows_iter:
         if all(v in (None, "") or (isinstance(v, str) and not v.strip()) for v in values):
+            continue
+        footer = _footer_label(values)
+        if footer:
+            skipped.append(SkippedRow(row_number=number, reason=f"footer row: {footer!r}"))
             continue
         try:
             rows.append(_parse_row(number, values, columns))
         except ValueError as e:
             errors.append(RowError(row_number=number, message=str(e)))
-    return SampleLoadResult(rows=rows, errors=errors)
+    return SampleLoadResult(rows=rows, errors=errors, skipped=skipped)
+
+
+def clean_text(value) -> str:
+    """Remove zero-width characters, turn NBSP/tabs into spaces, collapse whitespace."""
+    text = str(value or "").translate(ZERO_WIDTH).replace("\xa0", " ")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _footer_label(values: list) -> str | None:
+    """A row whose first non-empty cell is a word like 'Total' is a footer, not data."""
+    first = next((v for v in values if v not in (None, "")), None)
+    if isinstance(first, str) and clean_text(first).lower().rstrip(":") in FOOTER_WORDS:
+        return clean_text(first)
+    return None
 
 
 def _map_headers(values: list) -> dict[str, int]:
@@ -75,7 +96,7 @@ def _parse_row(number: int, values: list, columns: dict[str, int]) -> SampleRow:
         i = columns.get(field)
         return values[i] if i is not None and i < len(values) else None
 
-    vendor = str(get("vendor") or "").strip()
+    vendor = clean_text(get("vendor"))
     if not vendor:
         raise ValueError("vendor is empty")
     reference = get("reference")
@@ -89,7 +110,8 @@ def _parse_row(number: int, values: list, columns: dict[str, int]) -> SampleRow:
         vendor=vendor,
         amount=_parse_amount(get("amount")),
         invoice_date=_parse_date(get("invoice_date")),
-        reference=str(reference).strip() if reference not in (None, "") else None,
+        reference=clean_text(reference) or None,
+        excel_row=number,
     )
 
 
@@ -98,7 +120,13 @@ def _parse_amount(value) -> Decimal:
         raise ValueError("amount is missing or invalid")
     if isinstance(value, (int, float, Decimal)):
         return Decimal(str(value))
-    text = re.sub(r"[^\d,.\-]", "", str(value))
+    raw = clean_text(value)
+    negative = False
+    if raw.startswith("(") and raw.endswith(")"):  # accounting negative: (1,234.50)
+        negative, raw = True, raw[1:-1]
+    elif raw.endswith("-"):  # trailing minus: 123.45-
+        negative, raw = True, raw[:-1]
+    text = re.sub(r"[^\d,.\-]", "", raw)
     if "," in text and "." in text:  # last separator is the decimal one
         if text.rfind(",") > text.rfind("."):
             text = text.replace(".", "").replace(",", ".")
@@ -108,9 +136,10 @@ def _parse_amount(value) -> Decimal:
         head, _, tail = text.rpartition(",")
         text = f"{head.replace(',', '')}.{tail}" if len(tail) <= 2 else text.replace(",", "")
     try:
-        return Decimal(text)
+        amount = Decimal(text)
     except InvalidOperation:
         raise ValueError(f"amount is not a number: {value!r}") from None
+    return -amount if negative else amount
 
 
 def _parse_date(value) -> date:
@@ -119,8 +148,16 @@ def _parse_date(value) -> date:
     if isinstance(value, date):
         return value
     if isinstance(value, str):
+        text = value.strip()
         try:
-            return date.fromisoformat(value.strip())
+            return date.fromisoformat(text)
         except ValueError:
             pass
-    raise ValueError(f"date is missing or not YYYY-MM-DD: {value!r}")
+        if m := re.fullmatch(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", text):  # dd.mm.yyyy
+            try:
+                return date(int(m[3]), int(m[2]), int(m[1]))
+            except ValueError:
+                pass
+        if re.fullmatch(r"\d{1,2}/\d{1,2}/\d{2,4}", text):
+            raise ValueError(f"ambiguous date (day/month order unknown): {value!r}")
+    raise ValueError(f"date is missing or not YYYY-MM-DD / DD.MM.YYYY: {value!r}")
