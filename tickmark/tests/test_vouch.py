@@ -131,8 +131,16 @@ def test_a_difference_or_a_failed_check_is_a_difference():
 
 
 def test_never_matched_on_missing_evidence():
-    assert verdict(row(), [pdf()], VouchPolicy()).verdict == "needs_review"  # no audit period
+    assert verdict(row(), [pdf()], VouchPolicy()).verdict == "needs_review"  # no currency to compare
     assert verdict(row(), [pdf(confidence=0.5)]).verdict == "needs_review"
+
+
+def test_a_side_check_that_cannot_run_is_a_note_not_a_review():
+    v = verdict(row(), [pdf(subtotal="", lines=())])  # the claim agrees; VAT and totals cannot be checked
+    assert v.verdict == "matched" and any("vat_rate not checkable" in r for r in v.reasons)
+    assert verdict(row(), [pdf()], VouchPolicy(currency="EUR")).verdict == "matched"  # no audit period: a note
+    unsettled = vouch([linked()], [row()], [pdf(), pdf("b.pdf", vendor="")], Y2025)[0]
+    assert unsettled.verdict == "needs_review"  # a possible double payment still needs a look
 
 
 def test_difference_wins_over_unverifiable():

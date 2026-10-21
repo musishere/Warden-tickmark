@@ -11,9 +11,10 @@ import argparse
 import json
 import sys
 from datetime import date
+from pathlib import Path
 
 from tickmark.pipeline import run_vouch
-from tickmark.vouch import MARK, VouchPolicy, check_invoice, duplicate_map
+from tickmark.vouch import MARK, VouchPolicy, check_invoice, duplicate_map, parse_rates
 from tools.eval_identify import EXT, GEN, HARD
 from tools.reader_args import add_reader_args, make_reader, print_routes
 
@@ -46,8 +47,33 @@ def truth_hard(line_items: bool = True) -> dict[str, str]:
             for t in json.loads((HARD / "truth.json").read_text())}
 
 
+# checked by hand against the visible invoice: <dir>/truth.json holds the period, currency, VAT rates and rows
+TRUTHED = {"real": Path("data/real/facturx"), "variety-originals": Path("data/real/variety/originals"),
+           "variety-scans": Path("data/real/variety/scans"), "variety-photos": Path("data/real/variety/photos")}
+
+
+def _truth(base: Path) -> dict:
+    return json.loads((base / "truth.json").read_text()) if (base / "truth.json").exists() else {}
+
+
+def _truthed(base: Path):
+    def rows(line_items: bool = True) -> dict[str, str | list[str]]:
+        """A row may accept more than one verdict (a list), e.g. a wrong PDF: ⚠️ or ❓."""
+        return {r: t["expect"] for r, t in _truth(base)["rows"].items()}
+    return rows
+
+
+def _truthed_policy(base: Path) -> dict:
+    if not (t := _truth(base)):
+        return {}
+    start, end = (date.fromisoformat(d) for d in t["period"].split(":"))
+    return {"period_start": start, "period_end": end, "vat_rates": parse_rates(t["vat_rates"]),
+            "currency": t["currency"]}
+
+
 DATASETS = {"generated": (GEN, Y2025, truth_generated), "external": (EXT, Y2026, truth_external),
-            "hard": (HARD, Y2025, truth_hard)}
+            "hard": (HARD, Y2025, truth_hard),
+            **{name: (base, (None, None), _truthed(base)) for name, base in TRUTHED.items()}}
 
 
 def dataset_currency(base) -> str | None:
@@ -75,19 +101,26 @@ def evaluate(name: str, use_labels: bool, azure: str = "auto", line_items: bool 
         return 0
     extractor = make_reader(base / "labels" if use_labels else None, azure)
     run = run_vouch(base / "sample.xlsx", base / "invoices", extractor,
-                    VouchPolicy(period_start=period[0], period_end=period[1], currency=dataset_currency(base),
-                                line_items=line_items))
+                    VouchPolicy(**{"period_start": period[0], "period_end": period[1],
+                                   "currency": dataset_currency(base), "line_items": line_items,
+                                   **_truthed_policy(base)}))
     truth = truth_fn(line_items)
     right = false_ok = 0
     print(f"== {name} ({len(run.verdicts)} rows)")
     for v in run.verdicts:
         want = truth.get(v.row_id, "no_evidence")
-        right += v.verdict == want
+        ok = v.verdict in want if isinstance(want, list) else v.verdict == want
+        want = want[0] if isinstance(want, list) else want
+        right += ok
         bad = v.verdict == "matched" and want != "matched"
         false_ok += bad
-        if v.verdict != want:
+        if not ok:
             print(f"   {'❌ FALSE ✅' if bad else '·  differs'} {v.row_id}: got {MARK[v.verdict]} {v.verdict}, "
                   f"expected {MARK[want]} {want} | {'; '.join(v.reasons)[:120]}")
+    for key, want in truth.items():  # a stray page (no invoice of its own) must back no row
+        if want == "unlinked" and (rows := [v.row_id for v in run.verdicts if v.invoice_file == key.split()[-1]]):
+            false_ok += 1
+            print(f"   ❌ WRONG LINK {key} backs row(s) {', '.join(rows)}")
     counts = " | ".join(f"{MARK[k]} {sum(v.verdict == k for v in run.verdicts)}" for k in MARK)
     print(f"   verdicts {right}/{len(run.verdicts)} as labelled | false ✅ {false_ok} | {counts}")
     print_routes(run)

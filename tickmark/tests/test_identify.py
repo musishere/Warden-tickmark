@@ -71,6 +71,16 @@ def test_two_equally_good_pdfs_go_to_review():
     assert {c.invoice_file for c in r.candidates} == {"a.pdf", "b.pdf"}
 
 
+def test_number_reused_years_apart_is_settled_by_the_date():
+    # R-014: the same credit note number, vendor and amount on two PDFs, 3 days vs 5 years from the row
+    spec = {"reference": "RK21012345", "amount": "-8.79", "invoice_date": date(2013, 9, 13)}
+    near, far = (pdf(f, number="RK21012345", total="-8.79", subtotal="-7.67", tax="-1.12", d=d)
+                 for f, d in (("r014.pdf", "2013-09-16"), ("r011.pdf", "2018-09-16")))
+    assert (one(spec, far, near).status, one(spec, far, near).invoice_file) == ("linked", "r014.pdf")
+    close = pdf("r011.pdf", number="RK21012345", total="-8.79", subtotal="-7.67", tax="-1.12", d="2013-10-20")
+    assert one(spec, close, near).status == "needs_review"  # both near: still a person's call
+
+
 def test_more_agreeing_fields_wins():
     r = one({}, pdf("a.pdf"), pdf("b.pdf", d="2025-03-09"))
     assert (r.status, r.invoice_file) == ("linked", "a.pdf")

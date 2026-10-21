@@ -87,6 +87,16 @@ class Router:
                 elif name in inv.fields and other is local:
                     if _same(inv.fields[name].value, f.value):  # two readers agree: that confirms it
                         inv.fields[name] = inv.fields[name].model_copy(update={"corroborated": "local reading agrees"})
+                    elif name == "total" and (due := local.fields.get("amount_due")) \
+                            and _same(due.value, inv.fields[name].value):  # Azure took the amount due
+                        log.info("%s: total: using the labelled %r, not Azure's %r (the amount due)",
+                                 inv.file, f.value, inv.fields[name].value)
+                        inv.fields[name] = f.model_copy(update={
+                            "corroborated": f"labelled as the total; {due.value} is labelled as the amount due"})
+                    elif name == "currency" and f.corroborated:  # 'Invoice currency: GBP' beats Azure,
+                        log.info("%s: currency: using the labelled %r, not Azure's %r (the total's code)",
+                                 inv.file, f.value, inv.fields[name].value)
+                        inv.fields[name] = f  # which only takes the currency code of the total
                     else:
                         log.info("%s: %s: using Azure's %r, not the local %r", inv.file, name,
                                  inv.fields[name].value, f.value)

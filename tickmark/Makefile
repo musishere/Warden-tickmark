@@ -2,7 +2,7 @@
 PY := .venv/bin/python
 PORT ?= 8000
 
-.PHONY: help setup db migrate run logs demo test eval stop
+.PHONY: help setup db migrate run logs demo test eval eval-real eval-variety stop
 
 help:
 	@echo "make setup    create .venv and install (first time)"
@@ -42,6 +42,12 @@ test:
 
 eval:
 	$(PY) -m tools.eval_vouch --azure off --no-line-items
+
+eval-real:  # real invoices vs the hand-checked truth; Azure results come from data/cache/docint
+	$(PY) -m tools.eval_vouch --azure auto --no-line-items real
+
+eval-variety:  # unseen kinds: image invoices, other layouts, scans, phone photos (data/real/variety)
+	$(PY) -m tools.eval_vouch --azure auto --no-line-items variety-originals variety-scans variety-photos
 
 stop:
 	docker compose down

@@ -84,7 +84,7 @@ class Definition:
 
 INVOICE_VOUCHING = Definition(
     name="invoice_vouching",
-    version=3,  # 2: currency compared; 3: no required column, more meanings, PDF labels
+    version=4,  # 2: currency compared; 3: no required column, more meanings, PDF labels; 4: amount due
     evidence="invoice",
     fields=(
         FieldSpec("row_id", "identifier", "label", "row id",
@@ -109,11 +109,20 @@ INVOICE_VOUCHING = Definition(
                   description="who the invoice is addressed to"),
         FieldSpec("amount", "money", "corroborating", "amount", evidence_field="total",
                   aliases=frozenset({"amount", "total", "invoice amount", "invoice total", "gross amount"}),
-                  pdf_labels=frozenset({"total", "invoice total", "grand total", "amount due", "total due",
-                                        "total incl vat", "totaal", "te betalen", "gesamtbetrag", "bruttosumme",
-                                        "rechnungsbetrag", "zahlbetrag", "endbetrag", "zu zahlen", "gesamtsumme",
-                                        "total ttc", "net à payer", "montant ttc"}),
+                  pdf_labels=frozenset({"total", "invoice total", "grand total", "total incl vat", "totaal",
+                                        "gesamtbetrag", "bruttosumme", "rechnungsbetrag", "endbetrag", "gesamtsumme",
+                                        "total ttc", "montant ttc"}),
                   description="the invoice total including tax"),
+        FieldSpec("amount_due", "money", "attribute", "amount due", evidence_field="amount_due",
+                  pdf_labels=frozenset({"amount due", "total due", "balance due", "te betalen", "zahlbetrag",
+                                        "zu zahlen", "net à payer", "solde à payer"}),
+                  description="what is left to pay: the total less prepayments, plus arrears"),
+        FieldSpec("charges", "money", "attribute", "charges", evidence_field="charges",
+                  pdf_labels=frozenset({"gesamtbetrag der zuschläge", "total charges"}),
+                  description="the invoice's surcharges (shipping, packaging): not its total"),
+        FieldSpec("allowances", "money", "attribute", "allowances", evidence_field="allowances",
+                  pdf_labels=frozenset({"gesamtbetrag der abschläge", "total allowances", "total discounts"}),
+                  description="the invoice's discounts: not its total"),
         FieldSpec("net_amount", "money", "attribute", "net amount", evidence_field="subtotal",
                   aliases=frozenset({"net", "net amount", "subtotal", "amount excl vat", "net total"}),
                   pdf_labels=frozenset({"net total", "subtotal", "sub total", "net amount", "total excl vat",
@@ -124,7 +133,7 @@ INVOICE_VOUCHING = Definition(
                   aliases=frozenset({"vat", "tax", "vat amount", "tax amount", "btw"}),
                   pdf_labels=frozenset({"vat", "tax", "vat amount", "total vat", "btw", "mwst", "ust",
                                         "umsatzsteuer", "mehrwertsteuer", "steuerbetrag", "tva", "montant tva",
-                                        "total tva"}),
+                                        "total tva", "total taxes", "tax total", "total tax"}),
                   description="the tax (VAT) on the invoice"),
         FieldSpec("invoice_date", "date", "corroborating", "date", evidence_field="invoice_date",
                   aliases=frozenset({"date", "invoice date"}),
@@ -143,6 +152,8 @@ INVOICE_VOUCHING = Definition(
                   description="the buyer's purchase order number"),
         FieldSpec("currency", "currency", "attribute", "currency", evidence_field="currency",
                   aliases=frozenset({"currency", "ccy", "cur", "currency code"}),
+                  pdf_labels=frozenset({"currency", "invoice currency", "rechnungswährung", "devise", "valuta"}),
+                  # not a bare 'Währung': 'Währung der Umsatzsteuerbuchung' is the VAT's currency, not the invoice's
                   description="the currency of the amount (three-letter code)",
                   compare_when_empty=True, from_header_of="amount"),
     ),

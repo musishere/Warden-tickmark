@@ -4,9 +4,11 @@
   identification needs_review -> 👀 needs_review (not compared: which PDF it is is not settled)
   linked:
     any field differs or any check fails   -> ⚠️ difference (every field and check listed)
-    else anything unverifiable / not_checkable -> 👀 needs_review (never ✅ on missing evidence)
+    else a claimed field unverifiable, or a possible duplicate not settled -> 👀 needs_review
+                                            (never ✅ on missing evidence for the claim)
     else                                    -> ✅ matched
-A check that warns (e.g. the number is also used by another vendor) is shown but does not block ✅.
+A check that warns (e.g. the number is also used by another vendor) is shown but does not block ✅, nor
+does a side check that could not run (VAT rate, totals, item lines, period): the claim itself is backed.
 """
 from tickmark.definitions import INVOICE_VOUCHING, Definition
 from tickmark.log import get
@@ -50,22 +52,25 @@ def _verdict(ident: Identification, cr: CleanRow, by_file: dict[str, ExtractedIn
                for a in agreements if a.result == "differs"]
     fails = [f"{c.name} failed: {c.detail}" for c in checks if c.status == "fail"]
     unknown = [f"{a.field} unverifiable: {a.detail}" for a in agreements if a.result == "unverifiable"]
-    unknown += [f"{c.name} not checkable: {c.detail}" for c in checks if c.status == "not_checkable"]
+    unknown += [f"{c.name} not checkable: {c.detail}" for c in checks
+                if c.status == "not_checkable" and c.name == "duplicate"]  # a double payment is a risk
     warns = [f"{c.name} warning: {c.detail}" for c in checks if c.status == "warn"]
+    warns += [f"{c.name} not checkable: {c.detail}" for c in checks
+              if c.status == "not_checkable" and c.name != "duplicate"]
 
     steps = [f"Linked to {inv.file}; compared {len(agreements)} claimed fields and ran {len(checks)} invoice checks",
              "Fields: " + ", ".join(f"{a.field} {a.result}" for a in agreements),
              "Checks: " + ", ".join(f"{c.name} {c.status}" for c in checks)]
     if differs or fails:
-        verdict, reasons = "difference", differs + fails
+        verdict, reasons = "difference", differs + fails + unknown  # what could not be verified, too
         steps.append(f"{len(differs)} field(s) differ and {len(fails)} check(s) fail → ⚠️ difference")
     elif unknown:
         verdict, reasons = "needs_review", unknown
         steps.append("Nothing differs, but not everything could be verified → 👀 needs_review")
     else:
         verdict, reasons = "matched", []
-        steps.append("Every claimed field agrees and every check passes → ✅ matched")
+        steps.append("Every claimed field agrees and no check fails → ✅ matched")
     if warns:
-        steps.append("Warnings (shown, not blocking): " + "; ".join(warns))
+        steps.append("Warnings and checks that could not run (shown, not blocking): " + "; ".join(warns))
     return Verdict(**base, verdict=verdict, invoice_file=inv.file, agreements=agreements, checks=checks,
                    reasons=reasons + warns, steps=steps)

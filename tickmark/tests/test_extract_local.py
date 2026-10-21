@@ -13,7 +13,7 @@ from reportlab.pdfgen import canvas
 from tickmark.extract import LabelExtractor
 from tickmark.extract.local import LocalExtractor
 from tickmark.extract.router import Router
-from tickmark.extract.text import found_in_text
+from tickmark.extract.text import corroborate, found_in_text
 from tickmark.models import ExtractedField, ExtractedInvoice
 from tickmark.pipeline import run_vouch
 from tickmark.vouch import VouchPolicy
@@ -124,6 +124,29 @@ def test_vendor_counts_only_in_the_letterhead_never_as_the_customer(tmp_path):
     assert found_in_text(inv, "identifier", "key", "inv 1") is None
 
 
+def test_a_date_read_day_first_is_turned_when_the_page_writes_month_first(tmp_path):
+    # r026: 'Invoice Date 11/03/2017' is 3 Nov, because 'Payment 11/17/2017' can only be month first
+    page = [(50, 60, "Invoice Date 11/03/2017"), (50, 80, "Payment 11/17/2017")]
+    for extra, want in (((), "2017-11-03"), (((50, 100, "Due 25/03/2017"),), "2017-03-11")):  # mixed: left alone
+        inv = read(pdf(tmp_path / "a.pdf", [*page, *extra]))
+        inv.fields["invoice_date"] = ExtractedField(name="invoice_date", value="2017-03-11", confidence=0.95)
+        corroborate(inv)
+        assert inv.fields["invoice_date"].value == want
+
+
+def test_vendor_in_a_letterhead_block_a_labelled_line_or_over_two_lines(tmp_path):
+    # r010 / r024 / r016: the date in the header must not end the letterhead
+    inv = read(pdf(tmp_path / "a.pdf", [(50, 60, "Rechnung Nr. R18-31 vom 03.10.2018"), (50, 80, "Name: Physiotherapeutin"),
+                                        (50, 100, "Au bon moulin SARL - 1242 chemin de l'olive - 84340 Malaucene"),
+                                        (50, 120, "MVM Musterhafter"), (50, 136, "Versicherungsverein a.G."),
+                                        (300, 332, "Total"), (460, 332, "121.00")]))
+    for name in ("Physiotherapeutin", "Au bon moulin", "MVM Musterhafter Versicherungsverein"):
+        assert found_in_text(inv, "name", "party", name) is not None, name
+    assert found_in_text(inv, "name", "party", "Au bon") is None  # still never part of a block
+    inv.fields["customer"] = ExtractedField(name="customer", value="Physiotherapeutin", confidence=0.9)
+    assert found_in_text(inv, "name", "party", "Physiotherapeutin") is None  # the invoice's customer
+
+
 # --- the file check: which PDFs cannot be read from their own text ----------------------------------
 
 def test_a_scan_has_no_text_layer(tmp_path):
@@ -170,6 +193,32 @@ def sample(tmp_path, rows) -> Path:
 def azure_answer(**fields):
     return lambda p: ExtractedInvoice(file=p.name, extractor="azure-docint", fields={
         k: ExtractedField(name=k, value=v, confidence=0.99) for k, v in fields.items()})
+
+
+def test_the_labelled_invoice_currency_beats_azures_guess(tmp_path):
+    # r030: invoiced in GBP, VAT booked in EUR; Azure takes EUR from the total
+    page = pdf(tmp_path / "a.pdf", [(50, 60, "Rechnungswährung : GBP"), (50, 80, "Währung der Umsatzsteuerbuchung : EUR"),
+                                    (50, 100, "Kosten der Lieferung"), (300, 332, "Total"), (460, 332, "121.00")])
+    assert read(page).fields["currency"].value == "GBP"  # not EUR, and never the word 'der'
+    inv = Router("always", FakeAzure(azure_answer(currency="EUR", total="121.00"))).extract(page)
+    assert inv.fields["currency"].value == "GBP"
+
+
+def test_the_total_is_not_the_amount_due(tmp_path):
+    # r008: gross 220, plus 220 arrears = 440 to pay; Azure takes the 440
+    page = pdf(tmp_path / "a.pdf", [(300, 280, "Gesamtbetrag der Zuschläge"), (460, 280, "0,00"),
+                                    (300, 300, "Rechnungssumme ohne USt."), (460, 300, "220,00"),
+                                    (300, 316, "Steuerbetrag"), (460, 316, "0,00"), (300, 332, "Bruttosumme"),
+                                    (460, 332, "220,00"), (300, 348, "Zahlbetrag"), (460, 348, "440,00")])
+    assert {k: values(read(page))[k] for k in ("total", "amount_due")} == {"total": "220.00", "amount_due": "440.00"}
+    inv = Router("always", FakeAzure(azure_answer(total="440.00"))).extract(page)
+    assert inv.fields["total"].value == "220.00"
+    # only 'Te betalen' printed: it is the total when net + tax add up to it, else it is not read as the total
+    for due, total in (("1.210,00", "1210.00"), ("710,00", None)):
+        only_due = read(pdf(tmp_path / "b.pdf", [(300, 300, "Totaal excl. BTW"), (460, 300, "1.000,00"),
+                                                 (300, 316, "BTW 21%"), (460, 316, "210,00"),
+                                                 (300, 332, "Te betalen"), (460, 332, due)]))
+        assert values(only_due).get("total") == total
 
 
 def test_auto_reads_clean_pdfs_locally_and_matches_without_azure(tmp_path):

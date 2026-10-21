@@ -11,7 +11,9 @@ Rules, in order:
   2. Invoice number equal + at least one more field equal -> can link. Number alone -> review.
   3. Without a usable number: vendor equal + (amount or date equal) -> can link.
      A vendor that is only similar never links (lookalike vendors) -> review.
-  4. The best candidate must have strictly more agreeing fields than any other, else review.
+  4. The best candidate must have strictly more agreeing fields than any other, else review -
+     unless the dates settle it: one candidate's date is within DATE_NEAR days of the row and every
+     tied rival's is more than DATE_FAR days away (the same number reused years apart).
   5. One PDF backs one row: if rows contend for a PDF, only a strictly better one keeps it.
 
 Every decision is recorded as it is made (Identification.comparisons and .steps), so a person can
@@ -43,8 +45,10 @@ log = get("identify")
 CONFIDENCE_MIN = settings.confidence_min  # below it a value needs independent confirmation (untrusted)
 VENDOR_SIMILAR = 90  # rapidfuzz token_sort_ratio on vendor keys: similar enough to review
 AMOUNT_TOL = Decimal("0.01")
+DATE_NEAR, DATE_FAR = 31, 365  # rule 4 tie-break: near enough to be this invoice, far enough not to be
 # Recorded with every stored run, so an old result can be explained after the rules change.
-THRESHOLDS = {"confidence_min": CONFIDENCE_MIN, "vendor_similar": VENDOR_SIMILAR, "amount_tol": str(AMOUNT_TOL)}
+THRESHOLDS = {"confidence_min": CONFIDENCE_MIN, "vendor_similar": VENDOR_SIMILAR, "amount_tol": str(AMOUNT_TOL),
+              "date_near": DATE_NEAR, "date_far": DATE_FAR}
 
 
 
@@ -67,6 +71,7 @@ class _Cand:
     eligible: bool
     note: str
     rank: tuple
+    days: int | None = None  # |row date − PDF date| when the PDF's date was read
 
 
 def _noun(spec: FieldSpec) -> str:
@@ -182,7 +187,7 @@ def _compare(cr: CleanRow, pdf: _Pdf, definition: Definition = INVOICE_VOUCHING)
     party = definition.by_role("party")[0]
     corroborating = [s.label for s in definition.by_role("corroborating")]
     key_conflict = party_similar = False
-    ratio, money_diff, date_diff = 0.0, Decimal(0), 0
+    ratio, money_diff, date_diff, date_gap = 0.0, Decimal(0), 0, None
 
     for spec in definition.linking:
         ev, rv = spec.evidence_field, row.get(spec.name)
@@ -234,6 +239,7 @@ def _compare(cr: CleanRow, pdf: _Pdf, definition: Definition = INVOICE_VOUCHING)
             if days == 0:
                 agree.append(spec.label)
             date_diff += abs(days or 0)
+            date_gap = abs(days) if days is not None else date_gap
             checks.append(_check_field(pdf, spec, rv.isoformat(), spec.label in agree,
                                        f"{days:+d} days (row − PDF)" if pv is not None else ""))
 
@@ -265,6 +271,8 @@ def _compare(cr: CleanRow, pdf: _Pdf, definition: Definition = INVOICE_VOUCHING)
         outcome = f"review only: {note}"
     else:
         outcome = f"not a candidate: agrees on {', '.join(agree) or 'nothing'}"
+    if cand:
+        cand.days = date_gap
     return Comparison(invoice_file=pdf.file, checks=checks, outcome=outcome), cand
 
 
@@ -309,6 +317,14 @@ def _near_miss(comparisons: list[Comparison]) -> str:
     return f"Closest PDF: {best.invoice_file} ({fields}); {best.outcome}"
 
 
+def _settled_by_date(tied: list[_Cand]) -> _Cand | None:
+    """The one tied candidate dated near the row while every other is dated far from it, else None."""
+    near = [c for c in tied if c.days is not None and c.days <= DATE_NEAR]
+    if len(near) == 1 and all(c.days is not None and c.days > DATE_FAR for c in tied if c is not near[0]):
+        return near[0]
+    return None
+
+
 def _candidate(c: _Cand) -> Candidate:
     return Candidate(invoice_file=c.pdf.file, agree=c.agree, note=c.note)
 
@@ -339,11 +355,17 @@ def identify(rows: list[CleanRow], invoices: list[ExtractedInvoice],
                                           reason="no PDF agrees on two or more fields"))
             continue
         best = cands[0]
+        tied = [c for c in cands if len(c.agree) >= len(best.agree)]
+        by_date = _settled_by_date(tied) if len(tied) > 1 else None
+        if by_date:
+            best = by_date
+            steps.append(f"{len(tied)} PDFs agree on {len(best.agree)} fields; {best.pdf.file} is dated "
+                         f"{best.days} days from the row, the others more than {DATE_FAR} (rule 4 tie-break)")
         if not best.eligible:
             steps.append(f"Best candidate {best.pdf.file} cannot link on its own: {best.note} → needs_review")
             results.append(Identification(**base, status="needs_review", reason=best.note, steps=steps))
             continue
-        rivals = [c for c in cands[1:] if len(c.agree) >= len(best.agree)]
+        rivals = [c for c in tied if c is not best] if not by_date else []
         if rivals:
             files = ", ".join(c.pdf.file for c in [best, *rivals])
             steps.append(f"Best {best.pdf.file} agrees on {len(best.agree)} fields, but "

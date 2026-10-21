@@ -16,6 +16,7 @@ Line items are not read here: that table needs Azure.
 import re
 import unicodedata
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 import pdfplumber
@@ -117,6 +118,13 @@ def check_page(page, n: int) -> str | None:
     return None
 
 
+def _number_or_text(value: str):
+    try:
+        return Decimal(value)
+    except InvalidOperation:
+        return value
+
+
 class LocalExtractor:
     def __init__(self, definition: Definition = INVOICE_VOUCHING):
         self.definition = definition
@@ -175,15 +183,24 @@ class LocalExtractor:
                                         decimal)
                     if value is not None:
                         found.setdefault(spec.evidence_field, []).append(value)
-                    if spec.evidence_field == "total":
+                    if spec.evidence_field in ("total", "amount_due"):
                         currencies += self._currency(row, block, end)
         for ev, values in found.items():
-            distinct = {v for v, _ in values}
+            distinct = {_number_or_text(v) for v, _ in values}  # '0' and '0.00' are one amount
             if len(distinct) == 1:
                 value, snip = values[0]
-                inv.fields[ev] = ExtractedField(name=ev, value=value, confidence=1.0, snip=snip)
+                inv.fields[ev] = ExtractedField(name=ev, value=value, confidence=1.0, snip=snip,
+                                                corroborated="labelled as the invoice currency" if ev == "currency" else "")
             else:
                 inv.unread[ev] = "ambiguous: " + " / ".join(f"{v} (page {s.page})" for v, s in values)
+        due = inv.fields.get("amount_due")
+        if due and "total" not in inv.fields and "total" not in inv.unread:  # only 'Te betalen' is printed:
+            try:  # it is the total when net + tax add up to it (nothing prepaid, no arrears)
+                if Decimal(inv.fields["subtotal"].value) + Decimal(inv.fields["tax"].value) == Decimal(due.value):
+                    inv.fields["total"] = due.model_copy(update={
+                        "name": "total", "corroborated": "net + tax = the amount due, so nothing was prepaid"})
+            except KeyError:
+                pass
         codes = {c for c, _ in currencies}
         if len(codes) == 1 and "currency" not in inv.fields:
             code, snip = currencies[0]
@@ -250,12 +267,10 @@ class LocalExtractor:
                 if t and re.search(r"\d", t):
                     return parse_identifier(t), [words[i]]
             return None
-        if type_ == "currency":
+        if type_ == "currency":  # printed as a code or symbol: 'GBP', '€' (never a word like 'der')
             for i, t in enumerate(texts):
-                try:
+                if t in SYMBOLS or re.fullmatch(r"[A-Z]{3}", t):
                     return parse_currency(SYMBOLS.get(t, t)), [words[i]]
-                except ValueError:
-                    pass
             return None
         text = " ".join(t for t in texts if t)
         return (text, words) if text else None
@@ -289,7 +304,7 @@ class LocalExtractor:
         stop = height * settings.pdf_letterhead_share
         for ln in lines:
             tokens = _norm(ln.text)
-            if ln.page == page_no and (re.search(r"\d[.,]\d{2}\b", ln.text) or any(
+            if ln.page == page_no and (re.search(r"\d[.,]\d{2}\b(?![.,]\d)", ln.text) or any(
                     tuple(tokens[j:j + len(c)]) == c for c in customer for j in range(len(tokens)))):
                 stop = min(stop, ln.bbox.y0 - 1)  # the whole line it is on ends the letterhead
         return next((i for i, ln in enumerate(lines) if ln.page != page_no or ln.bbox.y1 > stop), len(lines))
