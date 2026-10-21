@@ -2,12 +2,14 @@
 PY := .venv/bin/python
 PORT ?= 8000
 
-.PHONY: help setup db migrate run logs demo test eval eval-real eval-variety stop
+.PHONY: help setup db migrate run certs run-https logs demo test eval eval-real eval-variety stop
 
 help:
 	@echo "make setup    create .venv and install (first time)"
 	@echo "make db       start Postgres (docker) and apply migrations"
 	@echo "make run      start backend + frontend on http://localhost:$(PORT) (auto-reload)"
+	@echo "make certs    once: trusted https certificate for the Excel add-in"
+	@echo "make run-https  backend over https for the Excel add-in (addin/README.md)"
 	@echo "make logs     follow the step-by-step log"
 	@echo "make demo     generate the easy and tough test cases in data/demo/"
 	@echo "make test     run the tests"
@@ -28,6 +30,14 @@ migrate:
 
 run:
 	.venv/bin/uvicorn tickmark.api.main:app --reload --port $(PORT)
+
+CERTS := $(HOME)/.office-addin-dev-certs
+certs:  # once: a localhost certificate Excel trusts (asks for your password to add it to the keychain)
+	npx --yes office-addin-dev-certs install
+
+run-https:  # the backend over https, as the Excel add-in needs (addin/manifest.xml)
+	.venv/bin/uvicorn tickmark.api.main:app --reload --port $(PORT) \
+		--ssl-keyfile $(CERTS)/localhost.key --ssl-certfile $(CERTS)/localhost.crt
 
 logs:
 	tail -f data/logs/tickmark.log

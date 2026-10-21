@@ -36,6 +36,22 @@ def _same(a: str, b: str) -> bool:
         return a.strip().casefold() == b.strip().casefold()
 
 
+def _fill_if_it_adds_up(inv: ExtractedInvoice, local: ExtractedInvoice) -> None:
+    """r027: Azure read the total and the tax but not the net, the label reader read 'Net total 496.00';
+    496.00 + 75.04 = 571.04 confirms all three. A local value that does not add up is never used."""
+    for missing, (a, b) in (("subtotal", ("tax", "total")), ("tax", ("subtotal", "total"))):
+        if missing in inv.fields or missing not in local.fields or a not in inv.fields or b not in inv.fields:
+            continue
+        try:
+            x, y, z = (Decimal(f.value) for f in (local.fields[missing], inv.fields[a], inv.fields[b]))
+        except InvalidOperation:
+            continue
+        if abs((x + y if missing == "subtotal" else y + x) - z) <= Decimal("0.01"):
+            inv.fields[missing] = local.fields[missing].model_copy(update={"corroborated": "net + tax = total on the invoice"})
+            log.info("%s: %s: the local %s, as it adds up with Azure's %s and %s", inv.file, missing,
+                     local.fields[missing].value, a, b)
+
+
 class Router:
     def __init__(self, mode: str | None = None, azure=None, definition: Definition = INVOICE_VOUCHING):
         self.mode = mode or settings.azure
@@ -100,6 +116,8 @@ class Router:
                     else:
                         log.info("%s: %s: using Azure's %r, not the local %r", inv.file, name,
                                  inv.fields[name].value, f.value)
+        if not local.needs_ocr:  # a net or tax Azure did not read: the local one, only when the sums then add up
+            _fill_if_it_adds_up(inv, local)
         # the PDF's own text layer is independent of Azure; on a scan only Azure's OCR lines exist
         inv.lines = local.lines if not local.needs_ocr and local.lines else from_ocr.lines
         inv.letterhead = local.letterhead if inv.lines is local.lines else from_ocr.letterhead

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tickmark</title>
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <style>
+    :root { --ink: #1f2328; --muted: #656d76; --line: #d0d7de; --accent: #0969da; --bg: #fff; }
+    body { font: 13px/1.45 -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); margin: 0; padding: 12px; }
+    h1 { font-size: 16px; margin: 0 0 4px; }
+    h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 16px 0 6px; }
+    .muted { color: var(--muted); }
+    label { display: block; margin: 6px 0 2px; }
+    input, select, button { font: inherit; box-sizing: border-box; width: 100%; padding: 5px 6px; border: 1px solid var(--line); border-radius: 4px; }
+    .two { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    button { background: #f6f8fa; cursor: pointer; margin-top: 6px; }
+    button.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+    button:disabled { opacity: .5; cursor: default; }
+    #status { margin-top: 8px; min-height: 1.4em; }
+    #log { font: 11px/1.4 ui-monospace, Menlo, monospace; color: var(--muted); max-height: 120px; overflow: auto; white-space: pre-wrap; }
+    .counts { display: flex; gap: 10px; font-size: 14px; margin: 6px 0; }
+    .row { padding: 6px 4px; border-bottom: 1px solid var(--line); cursor: pointer; }
+    .row:hover { background: #f6f8fa; }
+    .why { color: var(--muted); font-size: 12px; }
+    .error { color: #cf222e; }
+  </style>
+</head>
+<body>
+  <h1>Tickmark</h1>
+  <div class="muted">Vouch the selected sample against its invoices.</div>
+
+  <h2>1 · Sample</h2>
+  <button id="use-range">Use selected range (with its header row)</button>
+  <div id="range" class="muted"></div>
+
+  <h2>2 · Invoices</h2>
+  <input id="pdfs" type="file" accept=".pdf" multiple>
+  <div id="pdf-count" class="muted"></div>
+
+  <h2>3 · Settings</h2>
+  <div class="two">
+    <div><label for="from">Period from</label><input id="from" type="date"></div>
+    <div><label for="to">to</label><input id="to" type="date"></div>
+  </div>
+  <div class="two">
+    <div><label for="currency">Currency</label><input id="currency" placeholder="EUR" maxlength="3"></div>
+    <div><label for="azure">Azure</label>
+      <select id="azure"><option value="auto">auto</option><option value="off">off</option><option value="always">always</option></select></div>
+  </div>
+  <label for="vat">VAT rates %</label><input id="vat" placeholder="0,7,19">
+
+  <div id="mapping" hidden>
+    <h2>Columns</h2>
+    <div class="muted">Some columns were not recognised by name. Say which column holds what.</div>
+    <div id="mapping-fields"></div>
+  </div>
+
+  <button id="run" class="primary" disabled>Check sample</button>
+  <div id="status"></div>
+  <div id="log"></div>
+
+  <div id="results" hidden>
+    <h2>Results</h2>
+    <div class="counts" id="counts"></div>
+    <div class="muted">Written next to your data. Click a row here to select it and open its invoice
+      (the links in the sheet open in desktop Excel; on the web, use this list).</div>
+    <div id="rows"></div>
+  </div>
+
+  <script src="taskpane.js"></script>
+</body>
+</html>

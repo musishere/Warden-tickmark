@@ -103,7 +103,7 @@ def evaluate(name: str, use_labels: bool, azure: str = "auto", line_items: bool 
     run = run_vouch(base / "sample.xlsx", base / "invoices", extractor,
                     VouchPolicy(**{"period_start": period[0], "period_end": period[1],
                                    "currency": dataset_currency(base), "line_items": line_items,
-                                   **_truthed_policy(base)}))
+                                   **(_truthed_policy(base) if base in TRUTHED.values() else {})}))
     truth = truth_fn(line_items)
     right = false_ok = 0
     print(f"== {name} ({len(run.verdicts)} rows)")

@@ -1,13 +1,17 @@
 """The web app end to end: upload, column meanings, a run with its live log, saving to an engagement.
 No network: Azure is off, the LLM is not called."""
+import json
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 
 from tickmark import log
+from tickmark.api import workspace
 from tickmark.api.main import app
 from tickmark.config import settings
 
@@ -68,6 +72,28 @@ def test_whole_flow_upload_confirm_run_with_its_log():
     assert {"api", "sheet", "mapping", "read", "router", "identify", "vouch"} <= steps
     assert sum("✅ matched" in line["msg"] for line in j["logs"]) == 8
     assert client.get(f"/api/workspaces/{v['id']}/pdf/invoice_001.pdf").headers["content-type"] == "application/pdf"
+
+
+def test_the_excel_add_in_sends_the_selected_range_and_gets_the_same_verdicts():
+    sample, pdfs = generated()
+    sheet = load_workbook(sample).active
+    values, formats = [], []
+    for row in sheet.iter_rows():  # as Office.js hands a range over: dates as serial numbers, with their format
+        values.append([(c.value - datetime(1899, 12, 30)).days if isinstance(c.value, datetime) else
+                       ("" if c.value is None else c.value) for c in row])
+        formats.append(["dd.mm.yyyy" if isinstance(c.value, datetime) else "General" for c in row])
+    r = client.post("/api/workspaces", data={"rows": json.dumps({"values": values, "formats": formats})},
+                    files=[("invoices", (p.name, p.read_bytes())) for p in pdfs])
+    v = r.json()
+    assert r.status_code == 200 and v["problems"] == [], r.text
+    client.put(f"/api/workspaces/{v['id']}/mapping", json={"columns": v["mapping"]["columns"], "confirmed_by": "x"})
+    j = wait(client.post(f"/api/workspaces/{v['id']}/runs", json={"period": "2025-01-01:2025-12-31",
+                                                                   "currency": "EUR", "azure": "off"}).json()["job"])
+    assert j["result"]["counts"] == {"matched": 8, "difference": 4, "needs_review": 0, "no_evidence": 4}
+    assert client.post("/api/workspaces", data={"rows": "not json"}).status_code == 400
+    workspace.WORKSPACES.clear()  # the server restarted: the invoice links in the sheet still open
+    assert client.get(f"/api/workspaces/{v['id']}/pdf/{pdfs[0].name}").status_code == 200
+    assert client.get("/api/workspaces/..%2F..%2Fetc/pdf/x.pdf").status_code == 404
 
 
 def test_an_unknown_layout_says_what_is_missing_and_a_bad_mapping_is_not_confirmed(tmp_path):

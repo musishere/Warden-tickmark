@@ -221,6 +221,21 @@ def test_the_total_is_not_the_amount_due(tmp_path):
         assert values(only_due).get("total") == total
 
 
+def test_sums_settle_a_missing_or_wrong_net_or_tax(tmp_path):
+    # r030: Azure took the tax in the booking currency (183.14); total - net = 163.16 is printed as well
+    page = pdf(tmp_path / "a.pdf", [(300, 300, "Steuerbetrag GBP 163,16 EUR 183,14"), (300, 332, "Bruttosumme 1021,91")])
+    inv = read(page)
+    for n, v in (("subtotal", "858.75"), ("tax", "183.14"), ("total", "1021.91")):
+        inv.fields[n] = ExtractedField(name=n, value=v, confidence=0.5)
+    corroborate(inv)
+    assert inv.fields["tax"].value == "163.16" and inv.fields["total"].corroborated
+    # r027: Azure read tax and total but no net; the local 'Net total' is used only because the sums add up
+    net = pdf(tmp_path / "b.pdf", [(300, 300, "Net total"), (460, 300, "496.00")])
+    for total, want in (("571.04", "496.00"), ("600.00", None)):
+        inv = Router("always", FakeAzure(azure_answer(tax="75.04", total=total))).extract(net)
+        assert values(inv).get("subtotal") == want
+
+
 def test_auto_reads_clean_pdfs_locally_and_matches_without_azure(tmp_path):
     (tmp_path / "inv").mkdir()
     invoice(tmp_path / "inv/a.pdf")

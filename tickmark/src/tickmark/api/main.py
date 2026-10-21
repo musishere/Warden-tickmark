@@ -5,6 +5,7 @@ upload sample + PDFs -> settle the column meanings (known names, LLM suggestion,
 Saving to the audit trail is optional (a firm + engagement). The firm and engagement come from the
 request here: a local stand-in. In production they come from the Warden-verified token. No auth.
 """
+import json
 from pathlib import Path
 from uuid import UUID
 
@@ -88,11 +89,17 @@ def _default_ctx(user: str | None) -> TenantContext | None:
 # --- upload and column meanings -------------------------------------------------------------------
 
 @app.post("/api/workspaces")
-async def create_workspace(sample: UploadFile = File(...), invoices: list[UploadFile] = File(default=[]),  # noqa: B008
-                           tenant: str | None = Form(None), engagement: str | None = Form(None),
-                           user: str | None = Form(None)) -> dict:
+async def create_workspace(sample: UploadFile | None = File(None), invoices: list[UploadFile] = File(default=[]),  # noqa: B008
+                           rows: str | None = Form(None), tenant: str | None = Form(None),
+                           engagement: str | None = Form(None), user: str | None = Form(None)) -> dict:
+    """The sample is an .xlsx upload (the page) or `rows`: {"values", "formats", "sheet"} of the range
+    selected in Excel (the add-in)."""
     ctx = _ctx(tenant, engagement, user) or _default_ctx(user)
-    ws = await workspace.create(sample, invoices, ctx, app.state.db)
+    try:
+        parsed = json.loads(rows) if rows else None
+    except ValueError:
+        raise HTTPException(400, "rows: not JSON") from None
+    ws = await workspace.create(sample, invoices, ctx, app.state.db, rows=parsed)
     return workspace.view(ws)
 
 

@@ -136,8 +136,11 @@ def test_never_matched_on_missing_evidence():
 
 
 def test_a_side_check_that_cannot_run_is_a_note_not_a_review():
-    v = verdict(row(), [pdf(subtotal="", lines=())])  # the claim agrees; VAT and totals cannot be checked
+    mixed = pdf(tax="15.13", total="115.13", lines=(("2", "50.00", "100.00"),))  # several VAT rates, no breakdown
+    v = verdict(row(amount=Decimal("115.13")), [mixed])
     assert v.verdict == "matched" and any("vat_rate not checkable" in r for r in v.reasons)
+    unsummed = verdict(row(), [pdf(subtotal="", lines=())])  # v023: nothing shows the total adds up
+    assert unsummed.verdict == "needs_review" and any("totals_reconcile" in r for r in unsummed.reasons)
     assert verdict(row(), [pdf()], VouchPolicy(currency="EUR")).verdict == "matched"  # no audit period: a note
     unsettled = vouch([linked()], [row()], [pdf(), pdf("b.pdf", vendor="")], Y2025)[0]
     assert unsettled.verdict == "needs_review"  # a possible double payment still needs a look

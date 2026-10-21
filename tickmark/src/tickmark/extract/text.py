@@ -87,6 +87,15 @@ def _slash_order(text: str) -> str | None:
     return orders.pop() if len(orders) == 1 else None
 
 
+def _printed(amount: Decimal, text: str) -> bool:
+    """1234.5 as '1234.50', '1234,50', '1,234.50', '1.234,50' or '1 234,50' between non-digits."""
+    plain = f"{amount:.2f}"
+    grouped = f"{amount:,.2f}"
+    forms = {plain, plain.replace(".", ","), grouped, grouped.translate(str.maketrans(",.", ".,")),
+             grouped.replace(",", " ").replace(".", ",")}
+    return any(re.search(rf"(?<![\d.,]){re.escape(f)}(?![\d])", text) for f in forms)
+
+
 def corroborate(inv: ExtractedInvoice, tol: Decimal = Decimal("0.01")) -> None:
     """Mark values that independent evidence confirms: net + tax = total on the invoice; an invoice
     number, date, currency or vendor that is literally printed on the page (the text lines)."""
@@ -94,6 +103,17 @@ def corroborate(inv: ExtractedInvoice, tol: Decimal = Decimal("0.01")) -> None:
         if (f := inv.fields.get(name)) and not f.corroborated:
             inv.fields[name] = f.model_copy(update={"corroborated": why})
 
+    lines_text = " " + " ".join(ln.text for ln in inv.lines) + " " if inv.lines else ""
+    try:  # r030: the tax was read in the booking currency (EUR 183.14); total - net (GBP 163.16) is printed too
+        sub, total = Decimal(inv.fields["subtotal"].value), Decimal(inv.fields["total"].value)
+        tax = Decimal(inv.fields["tax"].value) if "tax" in inv.fields else None
+        if (tax is None or abs(sub + tax - total) > tol) and lines_text and _printed(total - sub, lines_text):
+            was = inv.fields.get("tax")
+            inv.fields["tax"] = (was or inv.fields["subtotal"]).model_copy(update={
+                "name": "tax", "value": f"{total - sub:f}",
+                "corroborated": f"total - net, printed on the invoice{f' (read {was.value})' if was else ''}"})
+    except (KeyError, InvalidOperation):
+        pass
     try:
         sub, tax, total = (Decimal(inv.fields[n].value) for n in ("subtotal", "tax", "total"))
         if abs(sub + tax - total) <= tol:

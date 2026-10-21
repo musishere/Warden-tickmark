@@ -1,10 +1,13 @@
 """An upload: the sample and its invoice PDFs in data/uploads/<id>/, and the column mapping as it is
 being settled. Kept in memory (a local dev tool); the files stay on disk."""
+import re
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
+from openpyxl import Workbook
 
 from tickmark.config import settings
 from tickmark.definitions import INVOICE_VOUCHING
@@ -47,8 +50,15 @@ WORKSPACES: dict[str, Workspace] = {}
 
 
 def get(ws_id: str) -> Workspace:
+    """An upload, also after a restart: its files are on disk, only the unconfirmed mapping is lost."""
     if ws_id not in WORKSPACES:
-        raise HTTPException(404, f"no upload {ws_id}")
+        d = Path(settings.upload_dir) / ws_id
+        if not re.fullmatch(r"[0-9a-f]{12}", ws_id) or not (d / "sample.xlsx").is_file():  # an id, never a path
+            raise HTTPException(404, f"no upload {ws_id}")
+        ws = Workspace(id=ws_id, dir=d)
+        ws.mapping = alias_mapping(ws.sheet(), INVOICE_VOUCHING)
+        ws.origin = dict.fromkeys(ws.mapping.columns, "known name")
+        WORKSPACES[ws_id] = ws
     return WORKSPACES[ws_id]
 
 
@@ -56,17 +66,50 @@ async def _save(upload: UploadFile, to: Path) -> None:
     to.write_bytes(await upload.read())
 
 
-async def create(sample: UploadFile, invoices: list[UploadFile], ctx: TenantContext | None, db=None) -> Workspace:
-    """Store the files (only .xlsx / .pdf, by their base name) and start from the best known mapping."""
-    for f in [sample, *invoices]:
+def _is_date_format(fmt: str) -> bool:
+    """'dd.mm.yyyy', 'm/d/yy', 'yyyy-mm-dd h:mm': a date. '#,##0.00 [$€]', 'General': not."""
+    bare = re.sub(r'"[^"]*"|\[[^\]]*\]|\\.', "", fmt or "").lower()
+    return bool(re.search(r"[dy]", bare))
+
+
+def sheet_from_rows(rows: dict, to: Path) -> None:
+    """The Excel add-in's selected range as the sample .xlsx. Excel hands over a date as its serial
+    number, so a number in a cell formatted as a date becomes that date again."""
+    values, formats = rows.get("values"), rows.get("formats") or []
+    if not isinstance(values, list) or not values or len(values) > 20000 or not all(isinstance(r, list) for r in values):
+        raise HTTPException(400, "rows: expected the selected range as a list of rows (at most 20000)")
+    wb = Workbook()
+    sheet = wb.active
+    sheet.title = str(rows.get("sheet") or "Sample")[:31]
+    for r, row in enumerate(values):
+        for c, v in enumerate(row):
+            fmt = formats[r][c] if r < len(formats) and c < len(formats[r]) else ""
+            if isinstance(v, int | float) and not isinstance(v, bool) and _is_date_format(fmt):
+                v = datetime(1899, 12, 30) + timedelta(days=v)  # Excel's day 0 (with its 1900 leap-year bug)
+            if not isinstance(v, str | int | float | bool | datetime) or v == "":
+                v = None
+            sheet.cell(r + 1, c + 1, v)
+    wb.save(to)
+
+
+async def create(sample: UploadFile | None, invoices: list[UploadFile], ctx: TenantContext | None, db=None,
+                 rows: dict | None = None) -> Workspace:
+    """Store the files (only .xlsx / .pdf, by their base name) and start from the best known mapping.
+    The sample is an uploaded .xlsx, or the rows the Excel add-in read from the open workbook."""
+    if sample is None and rows is None:
+        raise HTTPException(400, "send the sample: an .xlsx file or the rows of the selected range")
+    for f in [*([sample] if sample else []), *invoices]:
         if Path(f.filename or "").suffix.lower() not in ALLOWED:
             raise HTTPException(400, f"{f.filename!r}: only .xlsx samples and .pdf invoices are accepted")
-    if Path(sample.filename).suffix.lower() != ".xlsx":
+    if sample and Path(sample.filename).suffix.lower() != ".xlsx":
         raise HTTPException(400, "the sample must be an .xlsx file")
     ws_id = uuid.uuid4().hex[:12]
     ws = Workspace(id=ws_id, dir=Path(settings.upload_dir) / ws_id, ctx=ctx)
     ws.invoices.mkdir(parents=True)
-    await _save(sample, ws.sample)
+    if sample:
+        await _save(sample, ws.sample)
+    else:
+        sheet_from_rows(rows, ws.sample)
     for f in invoices:
         await _save(f, ws.invoices / Path(f.filename).name)  # base name only: no ../ out of the folder
     sheet = ws.sheet()

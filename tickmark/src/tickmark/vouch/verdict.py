@@ -4,11 +4,13 @@
   identification needs_review -> 👀 needs_review (not compared: which PDF it is is not settled)
   linked:
     any field differs or any check fails   -> ⚠️ difference (every field and check listed)
-    else a claimed field unverifiable, or a possible duplicate not settled -> 👀 needs_review
-                                            (never ✅ on missing evidence for the claim)
+    else a claimed field unverifiable, a possible duplicate not settled, or a total nothing shows to
+         add up (totals not checkable)      -> 👀 needs_review (never ✅ on missing evidence)
     else                                    -> ✅ matched
 A check that warns (e.g. the number is also used by another vendor) is shown but does not block ✅, nor
-does a side check that could not run (VAT rate, totals, item lines, period): the claim itself is backed.
+does a side check that could not run (VAT rate, item lines, period): the claim itself is backed. Totals
+are the exception: a total that matches the row proves nothing if the invoice's own sums are unknown
+(measured: an invoice whose lines add up to 2112 under a printed total of 9312 was passed).
 """
 from tickmark.definitions import INVOICE_VOUCHING, Definition
 from tickmark.log import get
@@ -52,11 +54,12 @@ def _verdict(ident: Identification, cr: CleanRow, by_file: dict[str, ExtractedIn
                for a in agreements if a.result == "differs"]
     fails = [f"{c.name} failed: {c.detail}" for c in checks if c.status == "fail"]
     unknown = [f"{a.field} unverifiable: {a.detail}" for a in agreements if a.result == "unverifiable"]
+    blocking = ("duplicate", "totals_reconcile")  # a double payment; a total nothing shows to add up
     unknown += [f"{c.name} not checkable: {c.detail}" for c in checks
-                if c.status == "not_checkable" and c.name == "duplicate"]  # a double payment is a risk
+                if c.status == "not_checkable" and c.name in blocking]
     warns = [f"{c.name} warning: {c.detail}" for c in checks if c.status == "warn"]
     warns += [f"{c.name} not checkable: {c.detail}" for c in checks
-              if c.status == "not_checkable" and c.name != "duplicate"]
+              if c.status == "not_checkable" and c.name not in blocking]
 
     steps = [f"Linked to {inv.file}; compared {len(agreements)} claimed fields and ran {len(checks)} invoice checks",
              "Fields: " + ", ".join(f"{a.field} {a.result}" for a in agreements),
