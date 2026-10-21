@@ -13,17 +13,17 @@ def normalize_number(text: str) -> str:
 
 def found_in_text(inv: ExtractedInvoice, type_: str, role: str, value) -> Snip | None:
     """Where a row's value is printed on the PDF without a label, or None. Only two cases count:
-    an identifier as one exact word (ignoring spaces, dashes and case), and the party's name in the
-    issuer's letterhead (never elsewhere: there it may be the customer). Not found proves nothing."""
+    an identifier as one exact word (ignoring spaces, dashes and case), and the party's name as a whole
+    block of the issuer's letterhead (never part of one: 'Contoso' is not 'Contoso Labs'; never
+    elsewhere: there it may be the customer). Not found proves nothing."""
     if type_ == "identifier":
         want = normalize_number(str(value))
         for ln in inv.lines:
             if len(want) >= 3 and any(normalize_number(w) == want for w in ln.text.split()):
                 return Snip(page=ln.page, bbox=ln.bbox, text=ln.text)
     elif type_ == "name" and role == "party":
-        want = normalize_vendor(str(value)).split()
+        want = normalize_vendor(str(value))
         for ln in inv.lines[:inv.letterhead]:
-            words = normalize_vendor(ln.text).split() + [""]
-            if want and any(words[i:i + len(want)] == want for i in range(len(words))):
+            if want and normalize_vendor(ln.text) == want:
                 return Snip(page=ln.page, bbox=ln.bbox, text=ln.text)
     return None

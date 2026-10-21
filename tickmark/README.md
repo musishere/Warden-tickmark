@@ -10,7 +10,7 @@ Scope: [docs/MVP.md](docs/MVP.md). What is built, pipeline diagram and how to ve
 
 ```
 src/tickmark/          the application (the only code that ships)
-  api/                 FastAPI app
+  api/                 FastAPI app + the page (static/) + background runs with their log
   sample/              auditor's Excel sample: loader.py (read) + cleaner.py (keys, flags)
   checks/              deterministic pass/fail checks
   extract/             read invoice PDFs: own text first (local.py), Azure only where needed (router.py)
@@ -51,6 +51,18 @@ docker compose up -d && alembic upgrade head    # Tickmark's Postgres on port 54
 uvicorn tickmark.api.main:app --reload
 pytest                                           # DB tests skip if Postgres is not running
 ```
+
+## Web app (whole flow, with its log)
+```bash
+uvicorn tickmark.api.main:app --reload       # then open http://localhost:8000
+tail -f data/logs/tickmark.log               # the same step-by-step log the page shows
+```
+Upload a sample and its PDFs → settle each column's meaning (known names, "Ask the LLM", or by
+hand, incl. meanings of your own) → run (period, currency, Azure auto/off/always, item lines) →
+watch every step as it happens, then the verdicts with each field and check, and how each PDF was
+read. With a firm + engagement chosen, the mapping and the run are saved to the audit trail, past
+runs open again and reviews can be recorded. The firm/engagement come from the page here: a local
+stand-in for Warden; there is no login.
 
 ## Data tools
 ```bash

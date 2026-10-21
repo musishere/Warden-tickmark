@@ -18,7 +18,10 @@ from tickmark.definitions import INVOICE_VOUCHING, Definition
 from tickmark.extract.azure_docint import DocIntError, DocIntExtractor, ocr_words
 from tickmark.extract.local import LocalExtractor
 from tickmark.extract.text import found_in_text, normalize_number
+from tickmark.log import get
 from tickmark.models import ExtractedInvoice
+
+log = get("router")
 
 # what each invoice check needs read from the PDF (lines_sum: the item table, which only Azure reads)
 CHECK_NEEDS = {"totals_reconcile": ("subtotal", "tax", "total"), "vat_rate": ("subtotal", "tax"),
@@ -51,6 +54,10 @@ class Router:
             return self._azure(pdf, local, "every PDF goes to Azure (TICKMARK_AZURE=always)")
         if local.needs_ocr and self.mode == "auto":
             return self._azure(pdf, local, "; ".join(local.needs_ocr))
+        if local.needs_ocr:
+            log.warning("%s: needs OCR but Azure is off: left unread", local.file)
+        else:
+            log.info("%s: kept the local reading (Azure %s)", local.file, self.mode)
         self.routes[local.file] = ("local", "; ".join(local.needs_ocr))
         return local
 
@@ -58,9 +65,11 @@ class Router:
         return self._azure(pdf, local, why)
 
     def _azure(self, pdf: Path, local: ExtractedInvoice, why: str) -> ExtractedInvoice:
+        log.info("%s → Azure: %s", local.file, why)
         try:
             inv = self.azure.extract(pdf)
         except DocIntError as e:  # not configured or failed: keep the local reading, say what was missing
+            log.warning("%s: Azure not available (%s): keeping the local reading", local.file, e)
             self.routes[local.file] = ("local", f"Azure needed ({why}) but not available: {e}")
             if local.needs_ocr:
                 local.needs_ocr = [*local.needs_ocr, "Azure not available"]
@@ -76,6 +85,7 @@ class Router:
                     inv.fields[name] = f
                 elif not _same(inv.fields[name].value, f.value):
                     inv.unread[name] = f"read differently: Azure {inv.fields[name].value!r}, local {f.value!r}"
+                    log.warning("%s: %s %s - trusted by neither", inv.file, name, inv.unread[name])
                     del inv.fields[name]
             inv.lines, inv.letterhead = inv.lines or local.lines, inv.letterhead or local.letterhead
         self.routes[inv.file] = ("azure", why)
@@ -132,6 +142,7 @@ class Router:
             for f in sorted(local - linked):
                 if m := [n for n in unread_linking(by_file[f]) if n in mapped]:
                     want.setdefault(f, "a row has no PDF, and this one was not read completely: " + ", ".join(m))
+        log.info("second pass: %s", f"{len(want)} PDF(s) to Azure" if want else "nothing needs Azure")
         return want
 
     def summary(self) -> str:

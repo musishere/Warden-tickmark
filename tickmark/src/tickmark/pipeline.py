@@ -87,5 +87,5 @@ def _second_pass(run: IdentificationRun, extractor: Extractor) -> None:
             if r.status != "linked":
                 r.reason, r.steps = f"{r.reason}; {note}", [*r.steps, note]
         for v in run.verdicts:
-            if v.verdict in ("no_evidence", "needs_review"):
+            if v.verdict in ("no_evidence", "needs_review") and not v.invoice_file:  # rows without their PDF
                 v.reasons.append(note)

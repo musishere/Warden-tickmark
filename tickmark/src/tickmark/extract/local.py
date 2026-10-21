@@ -30,8 +30,10 @@ from tickmark.fields.types import (
     parse_date,
     parse_identifier,
 )
+from tickmark.log import get
 from tickmark.models import BBox, ExtractedField, ExtractedInvoice, Snip, TextLine
 
+log = get("read")
 SYMBOLS = {"€": "EUR", "£": "GBP"}  # '$' is left out: dollars of which country?
 DATE_FORMATS = ("%d %B %Y", "%d %b %Y", "%B %d, %Y", "%b %d, %Y", "%B %d %Y", "%b %d %Y")
 
@@ -126,14 +128,23 @@ class LocalExtractor:
                 needs_ocr = [why for n, p in enumerate(doc.pages, 1) if (why := check_page(p, n))]
                 pages = [(n, p.height, p.extract_words()) for n, p in enumerate(doc.pages, 1)]
         except Exception as e:  # noqa: BLE001 - encrypted or broken: not readable here, say why
+            log.warning("%s: cannot open (%s)", pdf.name, e.__class__.__name__)
             return ExtractedInvoice(file=pdf.name, extractor="local", needs_ocr=[f"cannot open: {e.__class__.__name__}"],
                                     raw={"reader": "local", "error": str(e)})
         raw = {"reader": "local", "needs_ocr": needs_ocr,
                "pages": [[{k: w[k] for k in ("text", "x0", "x1", "top", "bottom")} for w in words]
                          for _, _, words in pages]}
         if needs_ocr:
+            log.info("%s: cannot be read from its own text: %s", pdf.name, "; ".join(needs_ocr))
             return ExtractedInvoice(file=pdf.name, extractor="local", needs_ocr=needs_ocr, raw=raw)
-        return self.from_words(ExtractedInvoice(file=pdf.name, extractor="local", raw=raw), pages)
+        inv = self.from_words(ExtractedInvoice(file=pdf.name, extractor="local", raw=raw), pages)
+        log.info("%s: read from its own text: %s", pdf.name,
+                 ", ".join(f"{k}={f.value!r} (p{f.snip.page})" for k, f in inv.fields.items()) or "no labelled value")
+        for name, why in inv.unread.items():
+            log.info("%s: %s not read: %s", pdf.name, name, why)
+        if inv.letterhead:
+            log.debug("%s: letterhead %s", pdf.name, [ln.text for ln in inv.lines[:inv.letterhead]])
+        return inv
 
     def from_words(self, inv: ExtractedInvoice, pages: list[tuple[int, float, list[dict]]]) -> ExtractedInvoice:
         """Find the values and keep the text, from words with positions ({text, x0, x1, top, bottom}
@@ -196,7 +207,15 @@ class LocalExtractor:
         return sorted(out, key=lambda x: x[1])
 
     def _value(self, type_: str, row, bi: int, block: _Block, start: int, end: int, below, decimal):
-        """The value printed after a label: rest of its block, the next block on the line, or the line below."""
+        """The value printed after a label: rest of its block, the next block on the line, or the line below.
+        An amount must be the only one after its label on that line: a row like 'VAT  198,00  19  37,62'
+        (base, rate, tax) is a table, and picking one of its numbers would be a guess."""
+        after = block.words[block.tokens[end - 1][1] + 1:] + [w for b in row[bi + 1:] for w in b.words]
+        if type_ == "money":
+            amounts = {v[0] for w in after if re.search(r"\d[.,]\d", w["text"])
+                       and (v := self._parse("money", [w], decimal))}
+            if len(amounts) > 1:
+                return None
         candidates = [block.words[block.tokens[end - 1][1] + 1:]]  # the words after the label's last word
         if bi + 1 < len(row):
             candidates.append(row[bi + 1].words)

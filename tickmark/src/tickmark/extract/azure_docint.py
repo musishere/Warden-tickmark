@@ -10,6 +10,9 @@ from decimal import Decimal
 from pathlib import Path
 
 from tickmark.config import settings
+from tickmark.log import get
+
+log = get("azure")
 from tickmark.models import BBox, ExtractedField, ExtractedInvoice, ExtractedLineItem, Snip
 
 DEFAULT_CACHE = Path("data/cache/docint")
@@ -46,12 +49,17 @@ class DocIntExtractor:
         data = pdf.read_bytes()
         cached = self.cache_dir / f"{hashlib.sha256(data).hexdigest()}.json"
         if cached.exists():
+            log.info("%s: Azure result from cache (not billed)", pdf.name)
             result = json.loads(cached.read_text())
         else:
+            log.info("%s: calling Azure %s (billed per page)", pdf.name, settings.docint_model)
             result = self._analyze(data)
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             cached.write_text(json.dumps(result, indent=1))
-        return parse_result(result, pdf.name)
+        inv = parse_result(result, pdf.name)
+        log.info("%s: Azure read %s", pdf.name, ", ".join(f"{k}={f.value!r} ({f.confidence})"
+                                                          for k, f in inv.fields.items()) or "nothing")
+        return inv
 
     def _analyze(self, data: bytes) -> dict:
         if not (self.endpoint and self.key):

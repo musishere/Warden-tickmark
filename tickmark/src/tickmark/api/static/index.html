@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tickmark</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>Tickmark</h1>
+  <p class="muted">Vouch an auditor's sample against its invoices: every step shown, every decision explained.</p>
+  <div id="status" class="chips"></div>
+</header>
+
+<main>
+  <section id="s-upload">
+    <h2><span class="n">1</span> Upload</h2>
+    <form id="upload-form">
+      <label>Sample (.xlsx) <input type="file" name="sample" accept=".xlsx" required></label>
+      <label>Invoices (.pdf) <input type="file" name="invoices" accept=".pdf" multiple></label>
+      <fieldset>
+        <legend>Save to an audit trail (optional)</legend>
+        <div class="row">
+          <label>Firm <select id="tenant"><option value="">— none —</option></select></label>
+          <label>Engagement <select id="engagement"><option value="">— none —</option></select></label>
+          <label>You <input id="user" value="auditor" size="10"></label>
+        </div>
+        <details>
+          <summary>New firm / engagement</summary>
+          <div class="row">
+            <input id="new-firm" placeholder="Firm name"><button type="button" id="add-firm">Add firm</button>
+          </div>
+          <div class="row">
+            <input id="new-client" placeholder="Client name">
+            <input id="new-period" placeholder="2025-01-01:2025-12-31" size="22">
+            <input id="new-currency" placeholder="EUR" size="4">
+            <label class="inline"><input type="checkbox" id="new-lines"> item lines</label>
+            <button type="button" id="add-engagement">Add engagement</button>
+          </div>
+        </details>
+        <p id="db-note" class="muted"></p>
+      </fieldset>
+      <button type="submit" class="primary">Upload</button>
+    </form>
+  </section>
+
+  <section id="s-columns" hidden>
+    <h2><span class="n">2</span> Column meanings</h2>
+    <p id="sheet-info" class="muted"></p>
+    <div class="scroll"><table id="columns"><thead><tr>
+      <th>Col</th><th>Header</th><th>Values look like</th><th>Meaning</th><th>From</th>
+    </tr></thead><tbody></tbody></table></div>
+    <details id="own">
+      <summary>Add a meaning of this layout</summary>
+      <div class="row">
+        <input id="own-name" placeholder="cost_centre">
+        <select id="own-type"></select>
+        <input id="own-labels" placeholder="words printed next to it on the invoice, | separated" size="40">
+        <button type="button" id="own-add">Add</button>
+      </div>
+    </details>
+    <ul id="problems" class="problems"></ul>
+    <div class="row">
+      <button type="button" id="suggest">Ask the LLM</button>
+      <button type="button" id="confirm" class="primary">Check and confirm</button>
+      <span id="confirmed" class="muted"></span>
+    </div>
+  </section>
+
+  <section id="s-run" hidden>
+    <h2><span class="n">3</span> Run</h2>
+    <div class="row">
+      <label>Period from <input type="date" id="p-start"></label>
+      <label>to <input type="date" id="p-end"></label>
+      <label>Currency <input id="currency" size="4" placeholder="EUR"></label>
+      <label>Azure <select id="azure"><option>auto</option><option>off</option><option>always</option></select></label>
+      <label class="inline"><input type="checkbox" id="line-items"> item lines (Azure reads each linked invoice)</label>
+      <label class="inline"><input type="checkbox" id="save"> save to the audit trail</label>
+    </div>
+    <p class="muted">Empty fields use the engagement's settings when one is chosen.</p>
+    <button type="button" id="run" class="primary">Run</button>
+  </section>
+
+  <section id="s-log" hidden>
+    <h2><span class="n">4</span> What is happening</h2>
+    <div class="row">
+      <label>Step <select id="log-step"><option value="">all</option></select></label>
+      <label class="inline"><input type="checkbox" id="log-debug"> details</label>
+      <span id="job-status" class="muted"></span>
+    </div>
+    <pre id="log"></pre>
+  </section>
+
+  <section id="s-results" hidden>
+    <h2><span class="n">5</span> Results</h2>
+    <div id="counts" class="chips"></div>
+    <div class="scroll"><table id="verdicts"><thead><tr>
+      <th></th><th>Row</th><th>Verdict</th><th>Invoice</th><th>Why</th>
+    </tr></thead><tbody></tbody></table></div>
+    <h3>How each PDF was read</h3>
+    <div class="scroll"><table id="routes"><thead><tr>
+      <th>PDF</th><th>Read</th><th>Why Azure</th><th>Values read</th><th>Not read</th>
+    </tr></thead><tbody></tbody></table></div>
+    <h3>Sample rows not checked</h3>
+    <ul id="issues"></ul>
+  </section>
+
+  <section id="s-past" hidden>
+    <h2><span class="n">6</span> Saved runs of this engagement</h2>
+    <ul id="past"></ul>
+  </section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

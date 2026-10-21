@@ -4,9 +4,13 @@
 Two audit firms: firm A audits Coke and Pepsi (an ethical wall between them), firm B audits Acme.
 The app connects as tickmark_app (row-level security applies); provisioning uses the owner.
 """
+import os
+import tempfile
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+
+os.environ.setdefault("TICKMARK_LOG_DIR", tempfile.mkdtemp(prefix="tickmark-test-logs-"))  # not data/logs
 
 import pytest
 from alembic import command

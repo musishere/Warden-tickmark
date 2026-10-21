@@ -12,6 +12,7 @@ from sqlalchemy import Connection, Engine, select
 from sqlalchemy.dialects.postgresql import insert
 
 from tickmark.definitions import INVOICE_VOUCHING
+from tickmark.log import get
 from tickmark.match.identify import THRESHOLDS
 from tickmark.models import ExtractedInvoice, Identification
 from tickmark.pipeline import IdentificationRun
@@ -29,6 +30,7 @@ from tickmark.store.schema import (
     verdicts,
 )
 
+log = get("store")
 
 def matcher_version() -> str:
     try:
@@ -157,6 +159,8 @@ def save_run(run: IdentificationRun, ctx: TenantContext, *, started_at: datetime
                 document_id=doc_ids[v.invoice_file] if v.invoice_file else None,
                 agreements=[a.model_dump(mode="json") for a in v.agreements],
                 checks=[c.model_dump(mode="json") for c in v.checks], reasons=v.reasons, steps=v.steps))
+    log.info("run %s saved: %d rows, %d PDFs, %d verdicts (engagement %s)", run_id, len(run.loaded.rows),
+             len(run.extracted), len(run.verdicts), ctx.engagement_id)
     return run_id
 
 

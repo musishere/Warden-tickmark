@@ -9,11 +9,13 @@
 A check that warns (e.g. the number is also used by another vendor) is shown but does not block ✅.
 """
 from tickmark.definitions import INVOICE_VOUCHING, Definition
+from tickmark.log import get
 from tickmark.models import CleanRow, ExtractedInvoice, Identification, Verdict
 from tickmark.vouch.compare import compare
 from tickmark.vouch.invoice_checks import check_invoice, duplicate_map
 from tickmark.vouch.policy import VouchPolicy
 
+log = get("vouch")
 MARK = {"matched": "✅", "difference": "⚠️", "needs_review": "👀", "no_evidence": "❓"}
 
 
@@ -22,7 +24,13 @@ def vouch(identifications: list[Identification], rows: list[CleanRow], invoices:
     by_row = {cr.row.excel_row: cr for cr in rows}
     by_file = {inv.file: inv for inv in invoices}
     dups = duplicate_map(invoices)
-    return [_verdict(ident, by_row[ident.excel_row], by_file, policy, dups, definition) for ident in identifications]
+    verdicts = [_verdict(ident, by_row[ident.excel_row], by_file, policy, dups, definition) for ident in identifications]
+    for v in verdicts:
+        log.info("row %s %s %s%s", v.row_id, MARK[v.verdict], v.verdict, f": {'; '.join(v.reasons)}" if v.reasons else "")
+        for a in v.agreements:
+            log.debug("row %s   %s: row %s, PDF %s → %s %s", v.row_id, a.field, a.row_value, a.pdf_value or "—",
+                      a.result, a.delta or a.detail)
+    return verdicts
 
 
 def _verdict(ident: Identification, cr: CleanRow, by_file: dict[str, ExtractedInvoice], policy: VouchPolicy,

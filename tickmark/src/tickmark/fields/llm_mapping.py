@@ -23,6 +23,9 @@ from tickmark.fields.mapping import ColumnMapping, Meaning, headers_sha256
 from tickmark.fields.profile import profile_sheet
 from tickmark.fields.sheet import Sheet
 from tickmark.fields.types import TYPES, clean_text
+from tickmark.log import get
+
+log = get("llm")
 
 SYSTEM = """You map the columns of an auditor's spreadsheet to what they mean, so that each row can
 be checked against its invoice.
@@ -150,6 +153,8 @@ class LLMProposer:
             raise LLMNotConfigured(f"LLM mapping is not configured: set {', '.join(missing)} in .env")
         payload = request_payload(sheet, definition, self.send_values)
         output = _schema(sheet, definition)
+        log.info("asking %s about %d columns (%s)", self.model, len(sheet.headers),
+                 "with up to 5 example values each" if self.send_values else "headers and value patterns, no values")
         body = {
             "model": self.model,
             "max_tokens": 4000,
@@ -174,9 +179,15 @@ class LLMProposer:
             if not content or choice["message"].get("refusal"):
                 return None
             parsed = output.model_validate_json(content)
-        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError):
+        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as e:
+            log.warning("no proposal (%s: %s): map by hand", e.__class__.__name__, str(e)[:200])
             return None  # failed, refused or off-schema: map by hand
         columns, chosen, meanings = read_answer(parsed, definition)
+        for c in chosen:
+            log.info("proposed %s → %s (confidence %.2f): %s", c.field, c.column, c.confidence, c.reason)
+        dropped = len(parsed.new_meanings) - len(meanings)
+        if dropped:
+            log.info("%d proposed new meaning(s) dropped (name taken, column used, or no label)", dropped)
         return Proposal(columns=columns, fields=chosen, meanings=meanings,
                         model=data.get("model") or self.model, sent_values=self.send_values, request=payload,
                         stop_reason=choice.get("finish_reason"))

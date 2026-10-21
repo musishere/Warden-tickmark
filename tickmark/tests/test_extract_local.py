@@ -118,6 +118,9 @@ def test_vendor_counts_only_in_the_letterhead_never_as_the_customer(tmp_path):
                                         (300, 332, "Total"), (460, 332, "121.00")]))
     assert found_in_text(inv, "name", "party", "GLOBEX LIMITED") is not None
     assert found_in_text(inv, "name", "party", "Acme BV") is None  # the customer, not the issuer
+    assert found_in_text(inv, "name", "party", "Globex") is not None  # legal form ignored
+    labs = read(pdf(tmp_path / "b.pdf", [(50, 60, "Contoso Labs Ltd"), (300, 332, "Total"), (460, 332, "121.00")]))
+    assert found_in_text(labs, "name", "party", "Contoso Ltd") is None  # a look-alike is not the vendor
     assert found_in_text(inv, "identifier", "key", "inv 1") is None
 
 

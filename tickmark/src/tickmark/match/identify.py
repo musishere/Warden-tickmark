@@ -24,6 +24,7 @@ from rapidfuzz import fuzz
 
 from tickmark.definitions import INVOICE_VOUCHING, Definition, FieldSpec
 from tickmark.extract.text import found_in_text, normalize_number
+from tickmark.log import get
 from tickmark.models import (
     Candidate,
     CleanRow,
@@ -36,6 +37,7 @@ from tickmark.models import (
 )
 from tickmark.sample import normalize_vendor
 
+log = get("identify")
 CONFIDENCE_MIN = 0.90
 VENDOR_SIMILAR = 90  # rapidfuzz token_sort_ratio on vendor keys: similar enough to review
 AMOUNT_TOL = Decimal("0.01")
@@ -352,4 +354,9 @@ def identify(rows: list[CleanRow], invoices: list[ExtractedInvoice],
                 "reason": f"{file} is claimed by several rows ({others})",
                 "steps": [*results[i].steps, (f"{file} is also claimed by rows {others} and this row is "
                           "not strictly better (rule 5) → needs_review")]})
+    for r in results:
+        log.info("row %s → %s%s", r.row_id, r.status, f" {r.invoice_file}: {'; '.join(r.evidence)}" if r.invoice_file
+                 else f": {r.reason}")
+        for s in r.steps:
+            log.debug("row %s   %s", r.row_id, s)
     return results

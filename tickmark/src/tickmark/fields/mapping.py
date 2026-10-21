@@ -19,7 +19,8 @@ from tickmark.fields.sheet import CODE_IN_BRACKETS, Sheet, header_name, is_blank
 from tickmark.fields.types import TYPES, clean_text, column_decimal
 from tickmark.models import FieldValue, RowError, SampleLoadResult, SampleRow, SkippedRow
 
-FOOTER_WORDS = {"total", "subtotal", "sub total", "grand total", "sum", "totals", "notes", "note"}
+FOOTER_WORDS = {"total", "subtotal", "sub total", "grand total", "sum", "totals", "notes", "note",
+                "totaal", "subtotaal", "eindtotaal", "summe", "gesamt", "total général", "totale"}
 MIN_PARSE_RATE = 0.8  # a proposed column must parse as its type for at least this share of its values
 
 

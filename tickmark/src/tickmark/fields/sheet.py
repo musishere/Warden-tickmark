@@ -12,7 +12,10 @@ from openpyxl.utils.exceptions import InvalidFileException
 from tickmark.config import settings
 from tickmark.definitions import DEFINITIONS
 from tickmark.fields.types import clean_text
+from tickmark.log import get
 from tickmark.models import Cell
+
+log = get("sheet")
 
 
 class SampleFormatError(Exception):
@@ -113,5 +116,11 @@ def read_sheet(path: str | Path, sheet: str | None = None) -> Sheet:
                for i, v in enumerate(padded(header_values, width))]
     formulas = {(c.row, c.column_letter) for r in ws_f.iter_rows(min_row=header_row + 1) for c in r
                 if c.data_type == "f" and ws[c.coordinate].value is None}
+    log.info("%s, sheet %r: header on row %d (%d known names, %d text cells), %d columns, %d rows below",
+             path.name, ws.title, header_row, *header_score(header_values), len(headers), len(all_rows) - first - 1)
+    if above := [all_rows[i][0] for i in filled if i < first]:
+        log.info("rows above the header kept as skipped: %s", above)
+    if formulas:
+        log.warning("%d formula cells were never calculated (file not saved in Excel)", len(formulas))
     return Sheet(ws.title, header_row, headers, [SheetRow(n, values) for n, values in all_rows[first + 1:]],
                  preamble=[SheetRow(*all_rows[i]) for i in filled if i < first], formulas=formulas)

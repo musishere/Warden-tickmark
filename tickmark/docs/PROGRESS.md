@@ -335,6 +335,16 @@ generated 20/20 PDFs read locally with item lines off, verdicts identical to the
 one look-alike-vendor row is ❓ instead of 👀 locally (a similar name needs a vendor that was read).
 No false ✅ in any mode. Real scans and layouts still need `tools.compare_readers` with the Azure key.
 
+### 10c. Web app and step-by-step logs: `src/tickmark/api/`, `src/tickmark/log.py`
+`uvicorn tickmark.api.main:app` serves one page (`api/static/`, plain HTML/JS, no build) that drives
+the whole flow over JSON endpoints: upload (`POST /api/workspaces`), column meanings (`…/suggest`,
+`PUT …/mapping`, validated against every value), run (`POST …/runs` → a background job), the job's
+live log and result (`GET /api/jobs/{id}?since=n`), the PDFs, and — with a firm and engagement — the
+saved mapping, stored runs and reviews. Each step logs its decision to `tickmark.<step>` (`sheet`,
+`mapping`, `llm`, `read`, `azure` (cache hit vs billed call), `router`, `identify`, `vouch`, `store`,
+`api`): console and `data/logs/tickmark.log` at `TICKMARK_LOG_LEVEL`, and per job for the page
+(contextvars), details included. Tests: `tests/test_api.py` (whole flow, saving, uploads, log isolation).
+
 ### 11. Project layout
 ```
 src/tickmark/   app: api/, fields/ (sheet, types, mapping, profile, llm_mapping), definitions/, sample/, extract/,
@@ -417,8 +427,8 @@ Two separate questions:
 | New audit types | The definition format supports them; only `invoice_vouching` ships. A second type (e.g. expense receipts) proves it end to end. |
 | Reviewing verdicts | Reviews are recorded on the identification; a review step for verdicts is next. |
 | Warden | PDF reads are not yet routed through `WardenClient` (fail closed). |
-| API | `POST /engagements/{id}/vouch` and `GET …/runs/{runId}` are not built yet. They will read from the audit store. |
-| Review UI | Reviews are recorded with `tools.review`; no screen yet. |
+| API | A local web app exists (§10c). Production API: tenant from the Warden token, auth, uploads to Blob Storage, jobs in a queue instead of threads. |
+| Review UI | The web app records a review per row of a saved run; no review history view or verdict-level review yet. |
 | Tenant from the token | The API must take tenant and engagement from the Warden-verified token, never from the request. The CLI flags are stand-ins. |
 | Registry sync | `tenants` / `engagements` are registered by hand; sync them from Warden. |
 | Retention / deletion | Append-only plus per-firm deletion requests need a legal-hold design. |

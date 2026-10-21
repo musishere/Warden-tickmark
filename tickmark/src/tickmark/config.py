@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     pdf_word_gap: float = 15  # points between words that start a new block on the same line
     pdf_letterhead_share: float = 0.33  # the issuer's letterhead is never lower than this share of page 1
     evidence_dir: str = "data/store"  # content-addressed copies of every file a run used
+    log_level: str = "INFO"  # INFO: each step's decision; DEBUG: every candidate and comparison too
+    log_dir: str = "data/logs"  # tickmark.log, rotated (holds client values: local use)
+    upload_dir: str = "data/uploads"  # files uploaded through the web app, one folder per upload
 
 
 settings = Settings()
