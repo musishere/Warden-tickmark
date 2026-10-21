@@ -2,7 +2,7 @@
 
     python -m tools.vouch_sample data/external/tickmark-sample/sample.xlsx data/external/tickmark-sample/invoices \
         --labels data/external/tickmark-sample/labels --period 2026-01-01:2026-12-31 [--trace] [--out x.xlsx]
-    python -m tools.vouch_sample SAMPLE.xlsx INVOICE_DIR --save      # period from the engagement
+    python -m tools.vouch_sample SAMPLE.xlsx INVOICE_DIR --save      # period and currency from the engagement
 
 First finds which PDF each row is about (tools.identify_sample), then compares the row's vendor,
 amount, date and invoice number with that PDF and runs the invoice's own checks (totals add up,
@@ -16,6 +16,7 @@ from pathlib import Path
 from openpyxl.styles import Alignment, PatternFill
 
 from tickmark.extract import DocIntExtractor, LabelExtractor
+from tickmark.fields.types import parse_currency
 from tickmark.models import Verdict
 from tickmark.pipeline import run_vouch
 from tickmark.vouch import MARK, VouchPolicy, parse_period
@@ -98,6 +99,8 @@ def main() -> None:
     ap.add_argument("invoices", type=Path)
     ap.add_argument("--labels", type=Path, help="use label JSON instead of Azure (testing only)")
     ap.add_argument("--period", help="audit period YYYY-MM-DD:YYYY-MM-DD (default with --save: the engagement's)")
+    ap.add_argument("--currency", help="currency of rows that do not state one, e.g. EUR "
+                                       "(default with --save: the engagement's)")
     ap.add_argument("--trace", action="store_true", help="print every comparison, check and step")
     ap.add_argument("--out", type=Path, help="write verdicts, comparisons and checks to a workbook")
     ap.add_argument("--save", action="store_true", help="store the run (and verdicts) in the audit database")
@@ -116,7 +119,19 @@ def main() -> None:
         print("⚠ no audit period: in_period cannot be checked, so no row can be ✅ "
               "(pass --period, or set it: python -m tools.tenants set-period)\n")
         period = (None, None)
-    policy = VouchPolicy(period_start=period[0], period_end=period[1])
+    currency = args.currency
+    if currency is None and ctx:
+        from tickmark.store import engagement_currency
+
+        currency = engagement_currency(ctx)
+    if currency is None:
+        print("⚠ no currency: rows that do not state one cannot be ✅ "
+              "(pass --currency, or set it: python -m tools.tenants set-currency)\n")
+    try:
+        currency = parse_currency(currency) if currency else None
+    except ValueError as e:
+        ap.error(str(e))
+    policy = VouchPolicy(period_start=period[0], period_end=period[1], currency=currency)
 
     started = datetime.now(UTC)
     extractor = LabelExtractor(args.labels) if args.labels else DocIntExtractor()

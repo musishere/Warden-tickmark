@@ -107,7 +107,7 @@ def _trusted(inv: ExtractedInvoice, definition: Definition = INVOICE_VOUCHING) -
             distrust(name, "not a number")
             return None
 
-    for spec in definition.compared:
+    for spec in definition.linking:
         ev = spec.evidence_field
         v = value(ev)
         if v is None:
@@ -167,7 +167,7 @@ def _compare(cr: CleanRow, pdf: _Pdf, definition: Definition = INVOICE_VOUCHING)
     key_conflict = party_similar = False
     ratio, money_diff, date_diff = 0.0, Decimal(0), 0
 
-    for spec in definition.compared:
+    for spec in definition.linking:
         ev, rv = spec.evidence_field, row.get(spec.name)
         if rv is None:
             checks.append(FieldCheck(field=spec.label, row_value="", pdf_value=_shown(pdf, ev), result="not in row"))
@@ -238,7 +238,7 @@ def _compare(cr: CleanRow, pdf: _Pdf, definition: Definition = INVOICE_VOUCHING)
 
 
 def _evidence(cr: CleanRow, c: _Cand, definition: Definition = INVOICE_VOUCHING) -> list[str]:
-    by_label = {s.label: s for s in definition.compared}
+    by_label = {s.label: s for s in definition.linking}
     out = []
     for a in c.agree:
         spec = by_label[a]
@@ -253,7 +253,7 @@ def _evidence(cr: CleanRow, c: _Cand, definition: Definition = INVOICE_VOUCHING)
 
 
 def _snips(c: _Cand, definition: Definition = INVOICE_VOUCHING) -> list[Snip]:
-    names = {s.label: s.evidence_field for s in definition.compared}
+    names = {s.label: s.evidence_field for s in definition.linking}
     return [c.pdf.snips[names[a]] for a in c.agree if names[a] in c.pdf.snips]
 
 
@@ -291,7 +291,7 @@ def identify(rows: list[CleanRow], invoices: list[ExtractedInvoice],
         compared = [_compare(cr, p, definition) for p in pdfs]
         cands = sorted((c for _, c in compared if c), key=lambda c: c.rank, reverse=True)
         steps = [
-            "Row: " + ", ".join(_describe(cr, spec) for spec in definition.compared if spec.role != "key")
+            "Row: " + ", ".join(_describe(cr, spec) for spec in definition.linking if spec.role != "key")
             + "".join(f", {_noun(spec)} {row.get(spec.name) or '—'}" for spec in definition.by_role("key")),
             f"Compared with {len(pdfs)} PDFs: {len(cands)} candidate(s)"
             + "".join(f"\n  {c.pdf.file}: agrees on {', '.join(c.agree)}"

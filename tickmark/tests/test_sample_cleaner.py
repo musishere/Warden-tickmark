@@ -126,3 +126,8 @@ def test_verify_clean_catches_tampering(tmp_path, monkeypatch, tamper, expect):
 
     monkeypatch.setattr(vc, "load_sample", tampered)
     assert any(expect in p for p in vc.verify(tmp_path / "sample_messy.xlsx"))
+
+
+def test_a_reused_row_id_is_noted():
+    cleaned = clean_sample([row("7"), row("7", vendor="Other", amount="20")])
+    assert cleaned.rows[0].flags == [] and cleaned.rows[1].flags == ["duplicate_row_id:7"]

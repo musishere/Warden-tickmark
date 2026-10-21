@@ -17,16 +17,17 @@ from tickmark.pipeline import run_vouch
 from tickmark.sample import clean_sample
 from tickmark.vouch import VouchPolicy, check_invoice, duplicate_map, vouch
 from tickmark.vouch.compare import compare
+from tools.eval_vouch import dataset_currency
 
 ROOT = Path(__file__).resolve().parents[1]
 GEN, EXT, HARD = ROOT / "data/generated", ROOT / "data/external/tickmark-sample", ROOT / "data/generated/hard"
-Y2025 = VouchPolicy(period_start=date(2025, 1, 1), period_end=date(2025, 12, 31))
+Y2025 = VouchPolicy(period_start=date(2025, 1, 1), period_end=date(2025, 12, 31), currency="EUR")
 
 
 def pdf(file="a.pdf", vendor="Acme B.V.", number="INV-1", d="2025-03-01", total="121.00", subtotal="100.00",
-        tax="21.00", lines=(("2", "50.00", "100.00"),), confidence=1.0):
+        tax="21.00", lines=(("2", "50.00", "100.00"),), confidence=1.0, currency="EUR"):
     values = {"vendor": vendor, "invoice_number": number, "invoice_date": d, "total": total,
-              "subtotal": subtotal, "tax": tax}
+              "subtotal": subtotal, "tax": tax, "currency": currency}
     return ExtractedInvoice(
         file=file, fields={k: ExtractedField(name=k, value=v, confidence=confidence) for k, v in values.items() if v},
         line_items=[ExtractedLineItem(description="x", quantity=q, unit_price=u, amount=a, confidence=confidence)
@@ -54,8 +55,8 @@ def checks(inv, policy=Y2025, others=()):
 # --- row vs PDF ---------------------------------------------------------------------------------
 
 def test_every_field_agrees():
-    assert [(a.field, a.result) for a in compare(row(reference="inv 1"), pdf())] == [
-        ("number", "agrees"), ("vendor", "agrees"), ("amount", "agrees"), ("date", "agrees")]
+    assert [(a.field, a.result) for a in compare(row(reference="inv 1"), pdf(), defaults={"currency": "EUR"})] == [
+        ("number", "agrees"), ("vendor", "agrees"), ("amount", "agrees"), ("date", "agrees"), ("currency", "agrees")]
 
 
 def test_differences_carry_the_exact_delta():
@@ -152,7 +153,7 @@ def _run(base, period):
     if not (base / "sample.xlsx").exists():
         pytest.skip(f"{base} missing")
     return run_vouch(base / "sample.xlsx", base / "invoices", LabelExtractor(base / "labels"),
-                     VouchPolicy(period_start=period[0], period_end=period[1]))
+                     VouchPolicy(period_start=period[0], period_end=period[1], currency=dataset_currency(base)))
 
 
 def test_external_pack_matches_its_expected_results():
@@ -195,3 +196,28 @@ def test_hard_set_links_are_all_matched():
     run = _run(HARD, (date(2025, 1, 1), date(2025, 12, 31)))
     linked_rows = {r.row_id for r in run.results if r.status == "linked"}
     assert {v.row_id for v in run.verdicts if v.verdict == "matched"} == linked_rows
+
+
+# --- currency ------------------------------------------------------------------------------------
+
+def with_currency(r, code):
+    r.row.set("currency", code)
+    return r
+
+
+def test_same_number_in_another_currency_is_a_difference():
+    v = verdict(with_currency(row(), "USD"), [pdf()])  # 121.00 USD vs 121.00 EUR
+    assert v.verdict == "difference" and "currency differs: row USD, PDF EUR" in v.reasons
+
+
+def test_the_engagement_currency_is_used_when_the_row_has_none():
+    v = verdict(row(), [pdf()])
+    assert v.verdict == "matched"
+    assert next(a for a in v.agreements if a.field == "currency").row_value == "EUR (the engagement's)"
+    assert verdict(row(), [pdf()], Y2025.model_copy(update={"currency": "GBP"})).verdict == "difference"
+
+
+def test_never_matched_without_a_currency_on_either_side():
+    no_currency = Y2025.model_copy(update={"currency": None})
+    assert verdict(row(), [pdf()], no_currency).verdict == "needs_review"  # the row (and engagement) say none
+    assert verdict(row(), [pdf(currency="")]).verdict == "needs_review"  # the PDF says none

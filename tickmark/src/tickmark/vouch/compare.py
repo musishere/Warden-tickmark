@@ -40,13 +40,22 @@ def _shown(inv: ExtractedInvoice, name: str) -> str:
 
 
 def compare(cr: CleanRow, inv: ExtractedInvoice, amount_tol: Decimal = Decimal("0.01"),
-            definition: Definition = INVOICE_VOUCHING) -> list[FieldAgreement]:
+            definition: Definition = INVOICE_VOUCHING, defaults: dict | None = None) -> list[FieldAgreement]:
     """Each claimed field the definition compares, in its order, by type. An optional field the
-    row leaves empty is not compared."""
+    row leaves empty is not compared, unless the definition says it must be (compare_when_empty):
+    then the engagement's value is used (defaults, e.g. its currency), and without one it is
+    unverifiable."""
     row = cr.row
     out: list[FieldAgreement] = []
     for spec in definition.compared:
         rv, ev, label = row.get(spec.name), spec.evidence_field, spec.label
+        source = ""
+        if rv is None and spec.compare_when_empty:
+            rv, source = (defaults or {}).get(spec.name), " (the engagement's)"
+            if rv is None:
+                out.append(FieldAgreement(field=label, row_value="", pdf_value=_shown(inv, ev), result="unverifiable",
+                                          detail=f"the row has no {label} and the engagement sets none"))
+                continue
         if rv is None:
             continue
         shown = rv.isoformat() if isinstance(rv, date) else str(rv)
@@ -74,6 +83,10 @@ def compare(cr: CleanRow, inv: ExtractedInvoice, amount_tol: Decimal = Decimal("
             same = key == cr.vendor_key
             out.append(FieldAgreement(field=label, row_value=shown, pdf_value=pv, result="agrees" if same else "differs",
                                       detail=f"key {key!r}" if same else f"keys {cr.vendor_key!r} / {key!r}"))
+        elif spec.type == "currency":
+            same = pv.upper() == rv
+            out.append(FieldAgreement(field=label, row_value=shown + source, pdf_value=pv,
+                                      result="agrees" if same else "differs"))
         else:  # identifier, text
             same = normalize_number(pv) == normalize_number(rv) if spec.type == "identifier" else pv == rv
             out.append(FieldAgreement(field=label, row_value=shown, pdf_value=pv, result="agrees" if same else "differs"))

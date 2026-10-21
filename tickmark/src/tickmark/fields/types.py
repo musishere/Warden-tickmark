@@ -21,7 +21,26 @@ def clean_text(value) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def parse_amount(value, field: str = "amount") -> Decimal:
+COMMA_DECIMAL = re.compile(r"(?:^|[^\d,.])\d{1,3}(?:\.\d{3})*,\d{1,2}$|\d,\d{1,2}$")  # 1.234,50  12,5
+DOT_DECIMAL = re.compile(r"(?:^|[^\d,.])\d{1,3}(?:,\d{3})*\.\d{1,2}$|\d\.\d{1,2}$")  # 1,234.50  12.5
+
+
+def _digits(value) -> str:
+    return re.sub(r"[^\d,.]", "", clean_text(value))
+
+
+def column_decimal(values) -> str | None:
+    """The decimal mark a column's text amounts use: ',' or '.', or None when no value shows it
+    (or values show both). Decides '1.234' (1234 in a comma-decimal column, 1.234 in a dot one)."""
+    texts = [_digits(v) for v in values if isinstance(v, str)]
+    comma = any(COMMA_DECIMAL.search(t) for t in texts)
+    dot = any(DOT_DECIMAL.search(t) for t in texts)
+    return "," if comma and not dot else "." if dot and not comma else None
+
+
+def parse_amount(value, field: str = "amount", decimal: str | None = None) -> Decimal:
+    """decimal: the column's decimal mark (column_decimal). Without it, a value that reads two ways
+    ('1.234', '1,234') is refused rather than guessed."""
     if value is None or isinstance(value, bool) or value == "":
         raise ValueError(f"{field} is missing or invalid")
     if isinstance(value, (int, float, Decimal)):
@@ -35,14 +54,19 @@ def parse_amount(value, field: str = "amount") -> Decimal:
     elif raw.endswith("-"):  # trailing minus: 123.45-
         negative, raw = True, raw[:-1]
     text = re.sub(r"[^\d,.\-]", "", raw)
-    if "," in text and "." in text:  # last separator is the decimal one
-        if text.rfind(",") > text.rfind("."):
-            text = text.replace(".", "").replace(",", ".")
-        else:
-            text = text.replace(",", "")
-    elif "," in text:
-        head, _, tail = text.rpartition(",")
-        text = f"{head.replace(',', '')}.{tail}" if len(tail) <= 2 else text.replace(",", "")
+    if "," in text and "." in text:  # both: the last one is the decimal mark
+        decimal = "," if text.rfind(",") > text.rfind(".") else "."
+    elif decimal is None:
+        for sep in ",.":
+            parts = text.split(sep)
+            if len(parts) > 2:  # 1.234.567: only a thousands separator repeats
+                decimal = "," if sep == "." else "."
+            elif len(parts) == 2:
+                if len(parts[1]) == 3:
+                    raise ValueError(f"ambiguous {field} (thousands or decimal separator?): {value!r}")
+                decimal = sep
+    thousands = "." if decimal == "," else ","
+    text = text.replace(thousands, "").replace(",", ".")
     try:
         amount = Decimal(text)
     except InvalidOperation:
@@ -78,6 +102,14 @@ def parse_text(value, field: str = "text") -> str:
     return text
 
 
+def parse_currency(value, field: str = "currency") -> str:
+    """A three-letter currency code (ISO 4217 form): 'eur' -> 'EUR'. Symbols are refused: '$' is ambiguous."""
+    text = clean_text(value).upper()
+    if not re.fullmatch(r"[A-Z]{3}", text):
+        raise ValueError(f"{field} is not a three-letter currency code: {value!r}")
+    return text
+
+
 def parse_identifier(value, field: str = "identifier") -> str:
     """As written; 7.0 from Excel becomes '7'."""
     if isinstance(value, float) and value.is_integer():
@@ -99,4 +131,5 @@ TYPES: dict[str, FieldType] = {
     "name": FieldType("name", parse_text, str, str),
     "identifier": FieldType("identifier", parse_identifier, str, str),
     "text": FieldType("text", parse_text, str, str),
+    "currency": FieldType("currency", parse_currency, str, str),
 }

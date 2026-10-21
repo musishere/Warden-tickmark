@@ -140,6 +140,13 @@ def engagement_period(ctx: TenantContext, db: Engine | None = None) -> tuple:
     return (row.period_start, row.period_end) if row else (None, None)
 
 
+def engagement_currency(ctx: TenantContext, db: Engine | None = None) -> str | None:
+    """The currency of ctx's engagement, or None if it sets none."""
+    with scoped(ctx, db) as conn:
+        return conn.execute(select(engagements.c.currency)
+                            .where(engagements.c.id == ctx.engagement_id)).scalar_one_or_none()
+
+
 def add_review(ctx: TenantContext, run_id: UUID | str, row_id: str, *, decision: str,
                chosen_file: str | None = None, note: str = "", db: Engine | None = None) -> UUID:
     """Append ctx.user's decision for one row of a run. Never changes the tool's result."""

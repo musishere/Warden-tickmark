@@ -7,7 +7,7 @@ file is refused, naming the fields, and a mapping can be given instead (see tool
 from pathlib import Path
 
 from tickmark.definitions import INVOICE_VOUCHING, Definition
-from tickmark.fields.mapping import ColumnMapping, alias_mapping, apply_mapping, missing_required
+from tickmark.fields.mapping import ColumnMapping, alias_mapping, apply_mapping, describe_missing
 from tickmark.fields.sheet import SampleFormatError, read_sheet
 from tickmark.fields.types import clean_text
 from tickmark.models import SampleLoadResult
@@ -19,7 +19,7 @@ def load_sample(path: str | Path, sheet: str | None = None, definition: Definiti
                 mapping: ColumnMapping | None = None) -> SampleLoadResult:
     data = read_sheet(path, sheet)
     mapping = mapping or alias_mapping(data, definition)
-    missing = missing_required(definition, mapping)
+    missing = describe_missing(definition, mapping)
     if missing:
         raise SampleFormatError(f"missing required column(s): {', '.join(missing)}")
     return apply_mapping(data, definition, mapping)

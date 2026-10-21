@@ -64,7 +64,7 @@ class ExtractedLineItem(BaseModel):
 
 class ExtractedInvoice(BaseModel):
     """What an extractor read from one PDF. Field names: vendor, invoice_number, invoice_date,
-    total, subtotal, tax. A field the extractor could not read is absent."""
+    total, subtotal, tax, currency. A field the extractor could not read is absent."""
 
     file: str
     fields: dict[str, ExtractedField] = Field(default_factory=dict)

@@ -29,7 +29,7 @@ tools/                 developer tooling, not shipped
   eval_vouch.py        verdicts vs labels, defects found per check (false ✅ must be 0)
   show_run.py review.py verify_run.py   read a stored run, add a human review, verify evidence
   tenants.py           register audit firms (tenants) and client engagements
-  map_columns.py       which column holds which field, once per client (Claude can suggest)
+  map_columns.py       which column holds which field, once per client (an LLM can suggest)
 migrations/            Alembic: audit tables, append-only triggers, multi-tenant row-level security
 docker/initdb/         creates the tickmark_app database role (dev)
 tests/                 pytest, one file per area
@@ -73,21 +73,28 @@ python -m tools.identify_sample data/external/tickmark-sample/sample.xlsx \
 Azure results are cached in `data/cache/docint/` (one call per PDF, ever).
 
 ## Does the PDF back the row's claim?
-`tickmark.vouch` compares the row's vendor, amount, date and invoice number with its linked PDF and
-runs the invoice's own checks (totals, lines, VAT rate, audit period, duplicates). Any difference
-over 0.01 is ⚠️; anything that cannot be verified is 👀, never ✅. See [docs/PROGRESS.md](docs/PROGRESS.md) §8.
+`tickmark.vouch` compares the row's vendor, amount, currency, date and invoice number with its linked
+PDF and runs the invoice's own checks (totals, lines, VAT rate, audit period, duplicates). Any
+difference over 0.01 is ⚠️; anything that cannot be verified is 👀, never ✅. See [docs/PROGRESS.md](docs/PROGRESS.md) §8.
+The row's currency comes from a currency column, else `(XXX)` in the amount header (`Amount (USD)`),
+else the engagement's currency (`--currency`, or `tools.tenants set-currency`). The PDF's comes from
+the invoice total. No currency on either side → 👀.
 ```bash
-python -m tools.vouch_sample SAMPLE.xlsx INVOICE_DIR --period 2026-01-01:2026-12-31 --trace --out data/output/vouched.xlsx
+python -m tools.vouch_sample SAMPLE.xlsx INVOICE_DIR --period 2026-01-01:2026-12-31 --currency EUR --trace --out data/output/vouched.xlsx
 python -m tools.eval_vouch --labels
 ```
 
 ## Any spreadsheet layout
-Known headers map automatically. For anything else, map the columns once per client; the mapping is
-saved and reused for that header layout. Claude can suggest it from headers and value patterns
-(no values leave unless you separately allow it). See [docs/PROGRESS.md](docs/PROGRESS.md) §9.
+Known headers map automatically, unless two columns could hold the same field ("Amount" and
+"Total"): then it is never guessed. For anything else, map the columns once per client; the mapping
+is saved and reused for that header layout. An LLM (any OpenAI-compatible API, OpenRouter in
+`.env.example`) can suggest it from headers and value patterns (no values leave unless you
+separately allow it). Title rows above the header are found and kept. Text amounts follow the
+column's own decimal mark; one that reads two ways (`1.234`) is refused, never guessed.
+See [docs/PROGRESS.md](docs/PROGRESS.md) §9.
 ```bash
 python -m tools.map_columns SAMPLE.xlsx                                   # what is known, what is missing
-TICKMARK_LLM_MAPPING=on python -m tools.map_columns SAMPLE.xlsx --suggest # Claude suggests (patterns only)
+TICKMARK_LLM_MAPPING=on python -m tools.map_columns SAMPLE.xlsx --suggest # the LLM suggests (patterns only)
 python -m tools.map_columns SAMPLE.xlsx --set amount=D --set vendor=B --set invoice_date=C --confirm  # save
 python -m tools.vouch_sample SAMPLE.xlsx INVOICE_DIR --save              # uses the saved mapping
 ```
@@ -99,7 +106,7 @@ every result with its full trace, and human reviews. Every row belongs to one **
 app connects as `tickmark_app` (read + append only). See [docs/PROGRESS.md](docs/PROGRESS.md) §10.
 ```bash
 python -m tools.tenants add-tenant "Firm A"              # prints the tenant id
-python -m tools.tenants add-engagement <tenant id> "Coke" --period 2026-01-01:2026-12-31
+python -m tools.tenants add-engagement <tenant id> "Coke" --period 2026-01-01:2026-12-31 --currency EUR
 export TICKMARK_TENANT=<tenant id> TICKMARK_ENGAGEMENT=<engagement id>
 
 python -m tools.vouch_sample SAMPLE.xlsx INVOICE_DIR --save

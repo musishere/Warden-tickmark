@@ -35,7 +35,7 @@ def _verdict(ident: Identification, cr: CleanRow, by_file: dict[str, ExtractedIn
                        steps=["Identification needs review, so the claim is not compared yet → 👀 needs_review"])
 
     inv = by_file[ident.invoice_file]
-    agreements = compare(cr, inv, policy.amount_tol)
+    agreements = compare(cr, inv, policy.amount_tol, defaults={"currency": policy.currency})
     checks = check_invoice(inv, policy, dups)
     differs = [f"{a.field} differs: row {a.row_value}, PDF {a.pdf_value}" + (f", {a.delta}" if a.delta else "")
                for a in agreements if a.result == "differs"]

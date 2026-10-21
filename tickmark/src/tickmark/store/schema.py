@@ -78,8 +78,10 @@ engagements = Table(
     _now("created_at"),
     Column("period_start", Date),  # the audit period (Warden's); invoice dates are checked against it
     Column("period_end", Date),
+    Column("currency", Text),  # three-letter code: the amounts' currency when a row does not say
     UniqueConstraint("tenant_id", "id", name="engagements_scoped_key"),
     CheckConstraint("period_end >= period_start", name="engagements_period_order"),
+    CheckConstraint("currency ~ '^[A-Z]{3}$'", name="engagements_currency_code"),
 )
 
 documents = Table(
@@ -127,7 +129,7 @@ column_mappings = Table(
     Column("columns", JSONB, nullable=False),  # field -> column letter
     Column("source", Text, nullable=False),  # aliases | claude | person
     Column("notes", JSONB, nullable=False, server_default=text("'{}'::jsonb")),  # field -> reason
-    Column("proposal", JSONB),  # what was sent to and returned by Claude, if it proposed
+    Column("proposal", JSONB),  # what was sent to and returned by the LLM, if it proposed
     Column("confirmed_by", Text),  # who confirmed it; null for header aliases
     _now("created_at"),
     _scoped_key("column_mappings"),
@@ -271,7 +273,9 @@ verdicts = Table(
     _link("verdicts", "match_result_id", "match_results"),
     _link("verdicts", "document_id", "documents"),
     CheckConstraint("verdict in ('matched', 'difference', 'needs_review', 'no_evidence')", name="verdicts_verdict"),
-    CheckConstraint("(verdict in ('matched', 'difference')) = (document_id is not null)",
+    # ✅/⚠️ compared a document; ❓ has none; 👀 may be linked but not fully verifiable (or not linked)
+    CheckConstraint("(verdict not in ('matched', 'difference') or document_id is not null) and "
+                    "(verdict <> 'no_evidence' or document_id is null)",
                     name="verdicts_checked_has_document"),
 )
 

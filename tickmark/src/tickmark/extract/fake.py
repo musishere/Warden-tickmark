@@ -20,17 +20,17 @@ class LabelExtractor:
             inv = label["invoice"]
             values = {"vendor": inv["vendor"], "invoice_number": inv["invoice_number"],
                       "invoice_date": inv["invoice_date"], "total": inv["total"],
-                      "subtotal": inv["net_total"], "tax": inv["vat_amount"]}
+                      "subtotal": inv["net_total"], "tax": inv["vat_amount"], "currency": inv.get("currency")}
             lines = inv["line_items"]
         else:  # external pack: what is printed wins over what should have been printed
             values = {"vendor": label["vendor_name"], "invoice_number": label["invoice_number"],
                       "invoice_date": label["invoice_date"],
                       "total": label.get("printed_total", label["total"]),
-                      "subtotal": label["subtotal"], "tax": label["vat_amount"]}
+                      "subtotal": label["subtotal"], "tax": label["vat_amount"], "currency": label.get("currency")}
             lines = label["line_items"]
         return ExtractedInvoice(
             file=pdf.name, extractor="labels", model_id="ground-truth", raw=label,
-            fields={k: ExtractedField(name=k, value=str(v), confidence=1.0) for k, v in values.items()},
+            fields={k: ExtractedField(name=k, value=str(v), confidence=1.0) for k, v in values.items() if v is not None},
             line_items=[ExtractedLineItem(description=li["description"], quantity=str(li["quantity"]),
                                           unit_price=str(li["unit_price"]), amount=str(li["amount"]),
                                           confidence=1.0) for li in lines])

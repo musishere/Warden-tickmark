@@ -12,7 +12,6 @@ from pathlib import Path
 from tickmark.config import settings
 from tickmark.models import BBox, ExtractedField, ExtractedInvoice, ExtractedLineItem, Snip
 
-MODEL_ID = "prebuilt-invoice"
 DEFAULT_CACHE = Path("data/cache/docint")
 POINTS_PER_UNIT = {"inch": 72.0}  # PDF pages are reported in inches
 
@@ -62,7 +61,8 @@ class DocIntExtractor:
             self._client = DocumentIntelligenceClient(self.endpoint, AzureKeyCredential(self.key))
         from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
 
-        poller = self._client.begin_analyze_document(MODEL_ID, AnalyzeDocumentRequest(bytes_source=data))
+        poller = self._client.begin_analyze_document(settings.docint_model,
+                                                     AnalyzeDocumentRequest(bytes_source=data))
         return poller.result().as_dict()
 
 
@@ -70,7 +70,7 @@ def parse_result(result: dict, file: str) -> ExtractedInvoice:
     """Turn a saved AnalyzeResult (as_dict JSON) into an ExtractedInvoice."""
     raw = result
     result = result.get("analyzeResult", result)  # raw REST responses wrap the result
-    meta = {"extractor": "azure-docint", "model_id": result.get("modelId") or MODEL_ID,
+    meta = {"extractor": "azure-docint", "model_id": result.get("modelId") or settings.docint_model,
             "api_version": result.get("apiVersion"), "raw": raw}
     docs = result.get("documents") or []
     if not docs:
@@ -84,6 +84,10 @@ def parse_result(result: dict, file: str) -> ExtractedInvoice:
             continue
         fields[name] = ExtractedField(name=name, value=value, confidence=f.get("confidence"),
                                       snip=_snip(f, units))
+    total = (docs[0].get("fields") or {}).get("InvoiceTotal") or {}
+    if code := (total.get("valueCurrency") or {}).get("currencyCode"):  # the total's currency, as read
+        fields["currency"] = ExtractedField(name="currency", value=code, confidence=total.get("confidence"),
+                                            snip=_snip(total, units))
     items = ((docs[0].get("fields") or {}).get("Items") or {}).get("valueArray") or []
     return ExtractedInvoice(file=file, fields=fields, line_items=[_line(i, units) for i in items], **meta)
 

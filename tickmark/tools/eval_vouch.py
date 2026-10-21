@@ -48,6 +48,16 @@ DATASETS = {"generated": (GEN, Y2025, truth_generated), "external": (EXT, Y2026,
             "hard": (HARD, Y2025, truth_hard)}
 
 
+def dataset_currency(base) -> str | None:
+    """The one currency every invoice label of a dataset is in (rows state none), else None."""
+    found = set()
+    for f in (base / "labels").glob("*.json"):
+        label = json.loads(f.read_text())
+        if isinstance(label, dict):  # sample_labels.json is a list of rows, not an invoice
+            found.add((label.get("invoice") or label).get("currency"))
+    return found.pop() if len(found) == 1 else None
+
+
 def defect_truth(run) -> dict[str, set[str]]:
     """Generated invoice labels; a duplicate number involves every invoice that carries it."""
     labels = {p.stem + ".pdf": json.loads(p.read_text()) for p in (GEN / "labels").glob("invoice_*.json")}
@@ -63,7 +73,7 @@ def evaluate(name: str, use_labels: bool) -> int:
         return 0
     extractor = LabelExtractor(base / "labels") if use_labels else DocIntExtractor()
     run = run_vouch(base / "sample.xlsx", base / "invoices", extractor,
-                    VouchPolicy(period_start=period[0], period_end=period[1]))
+                    VouchPolicy(period_start=period[0], period_end=period[1], currency=dataset_currency(base)))
     truth = truth_fn()
     right = false_ok = 0
     print(f"== {name} ({len(run.verdicts)} rows)")
@@ -98,10 +108,10 @@ def evaluate(name: str, use_labels: bool) -> int:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--labels", action="store_true", help="extract from label JSON instead of Azure")
-    ap.add_argument("datasets", nargs="*", default=list(DATASETS), choices=list(DATASETS))
+    ap.add_argument("datasets", nargs="*", choices=list(DATASETS), help="default: all")
     args = ap.parse_args()
     print(f"extraction: {'labels (perfect, tests the rules only)' if args.labels else 'Azure Document Intelligence'}\n")
-    false_ok = sum(evaluate(d, args.labels) for d in args.datasets)
+    false_ok = sum(evaluate(d, args.labels) for d in args.datasets or DATASETS)
     print("✅ no false ✅" if not false_ok else f"❌ {false_ok} false ✅")
     sys.exit(1 if false_ok else 0)
 

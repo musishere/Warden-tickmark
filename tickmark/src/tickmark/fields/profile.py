@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from tickmark.fields.mapping import _data_rows, column_values
 from tickmark.fields.sheet import Sheet
-from tickmark.fields.types import TYPES, clean_text
+from tickmark.fields.types import TYPES, clean_text, column_decimal, parse_amount
 from tickmark.sample.cleaner import LEGAL_SUFFIXES
 
 MAGNITUDES = ["below one", "units", "tens", "hundreds", "thousands", "tens of thousands",
@@ -86,11 +86,13 @@ def profile_column(sheet: Sheet, col: str, with_examples: bool = False) -> Colum
     values = column_values(sheet, col)
     rows = sum(1 for _ in _data_rows(sheet))
     parses: dict[str, list] = {}
+    decimal = column_decimal(values)
     for name in ("money", "date", "identifier"):
+        parse = (lambda v, n: parse_amount(v, n, decimal)) if name == "money" else TYPES[name].parse
         ok = []
         for v in values:
             try:
-                ok.append(TYPES[name].parse(v, name))
+                ok.append(parse(v, name))
             except ValueError:
                 pass
         parses[name] = ok

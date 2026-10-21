@@ -30,11 +30,12 @@ def normalize_vendor(name: str) -> str:
 def clean_sample(rows: list[SampleRow], period: tuple[date, date] | None = None,
                  definition: Definition = INVOICE_VOUCHING) -> CleanedSample:
     """Adds the party's matching key and flags, field by field from the definition: a duplicate
-    (same party key + corroborating values as an earlier row), negative or zero money, a date
-    outside the period."""
+    (same party key + corroborating values as an earlier row), a row id used before, negative or
+    zero money, a date outside the period."""
     cleaned: list[CleanRow] = []
     notes: list[CleaningNote] = []
     seen: dict[tuple, str] = {}
+    ids: dict[str, int | None] = {}
     party = definition.by_role("party")[0]
     corroborating = definition.by_role("corroborating")
     what = ", ".join([party.label, *(s.label for s in corroborating[:-1])]) + f" and {corroborating[-1].label}"
@@ -50,6 +51,10 @@ def clean_sample(rows: list[SampleRow], period: tuple[date, date] | None = None,
             flag(cr, f"duplicate_of:{seen[key]}", f"same {what} as row {seen[key]}")
         else:
             seen[key] = row.row_id
+        if row.row_id in ids:
+            flag(cr, f"duplicate_row_id:{row.row_id}", f"row id {row.row_id!r} also on Excel row {ids[row.row_id]}")
+        else:
+            ids[row.row_id] = row.excel_row
         for spec in definition.fields:
             v = row.get(spec.name)
             if spec.type == "money" and v is not None:

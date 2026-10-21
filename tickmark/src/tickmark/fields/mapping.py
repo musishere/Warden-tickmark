@@ -2,18 +2,18 @@
 definition; applying it turns raw cells into typed values (or a row issue with a reason).
 
 Where a mapping comes from (recorded as `source`): a saved, confirmed one for the same client and
-header row; header aliases; a proposal (Claude) confirmed by a person; or a person alone.
+header row; header aliases; a proposal (an LLM) confirmed by a person; or a person alone.
 """
 import hashlib
 import json
-import re
+from functools import partial
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from tickmark.definitions import Definition
-from tickmark.fields.sheet import Sheet, is_blank, padded
-from tickmark.fields.types import TYPES, clean_text
+from tickmark.definitions import Definition, FieldSpec
+from tickmark.fields.sheet import CODE_IN_BRACKETS, Sheet, header_name, is_blank, padded
+from tickmark.fields.types import TYPES, clean_text, column_decimal
 from tickmark.models import FieldValue, RowError, SampleLoadResult, SampleRow, SkippedRow
 
 FOOTER_WORDS = {"total", "subtotal", "sub total", "grand total", "sum", "totals", "notes", "note"}
@@ -28,35 +28,40 @@ class ColumnMapping(BaseModel):
     confirmed_by: str | None = None
     headers_sha256: str = ""  # which header row it was made for
     notes: dict[str, str] = Field(default_factory=dict)  # field -> why (a proposal's reasons)
-    proposal: dict | None = None  # what was sent to and returned by Claude, kept for the audit trail
-
-
-def header_name(value) -> str:
-    """'Amount (EUR)' -> 'amount', 'Invoice No.' -> 'invoice no', ' Row ID: ' -> 'row id'."""
-    text = re.sub(r"\([^)]*\)", " ", clean_text(value).lower())
-    return " ".join(text.replace(".", " ").replace(":", " ").replace("_", " ").split())
+    proposal: dict | None = None  # what was sent to and returned by the LLM, kept for the audit trail
 
 
 def headers_sha256(sheet: Sheet) -> str:
-    """Identifies a header layout: same columns, same names, same order."""
-    names = [[h.col, header_name(h.header)] for h in sheet.headers]
+    """Identifies a header layout: same columns, same headers, same order. Brackets count:
+    'Amount (EUR)' and 'Amount (USD)' are different layouts."""
+    names = [[h.col, clean_text(h.header).casefold()] for h in sheet.headers]
     return hashlib.sha256(json.dumps(names).encode()).hexdigest()
 
 
 def alias_mapping(sheet: Sheet, definition: Definition) -> ColumnMapping:
-    """Columns whose header is a known name of a field. May leave fields unmapped."""
-    columns: dict[str, str] = {}
+    """Columns whose header is a known name of a field. May leave fields unmapped. A field that
+    two or more columns could hold ('Amount' and 'Total') is not guessed: it stays unmapped, with
+    the candidates in notes, for a person (or a proposal they confirm) to choose."""
+    found: dict[str, list] = {}
     for h in sheet.headers:
         name = header_name(h.header)
         for f in definition.fields:
-            if name in f.aliases and f.name not in columns:
-                columns[f.name] = h.col
+            if name in f.aliases:
+                found.setdefault(f.name, []).append(h)
+    columns = {f: hs[0].col for f, hs in found.items() if len(hs) == 1}
+    notes = {f: "ambiguous: could be " + " or ".join(f"{h.col} {h.header!r}" for h in hs)
+             for f, hs in found.items() if len(hs) > 1}
     return ColumnMapping(definition=definition.name, version=definition.version, columns=columns,
-                         source="aliases", headers_sha256=headers_sha256(sheet))
+                         source="aliases", headers_sha256=headers_sha256(sheet), notes=notes)
 
 
 def missing_required(definition: Definition, mapping: ColumnMapping) -> list[str]:
     return [f.name for f in definition.required if f.name not in mapping.columns]
+
+
+def describe_missing(definition: Definition, mapping: ColumnMapping) -> list[str]:
+    """missing_required, each with why when known: 'amount (ambiguous: could be C 'Amount' or D 'Total')'."""
+    return [f"{f} ({mapping.notes[f]})" if f in mapping.notes else f for f in missing_required(definition, mapping)]
 
 
 def _footer_label(values: list) -> str | None:
@@ -77,6 +82,26 @@ def column_values(sheet: Sheet, col: str) -> list:
     """The non-empty values of one column, data rows only."""
     i = next(n for n, h in enumerate(sheet.headers) if h.col == col)
     return [v for row in _data_rows(sheet) if (v := padded(row.values, len(sheet.headers))[i]) not in (None, "")]
+
+
+def parser(sheet: Sheet, spec: FieldSpec, col: str):
+    """How this column's cells are read as the field's type. Money learns the column's decimal mark
+    from all its values, so '1.234' is 1234 in a '1.234,50' column and is refused when nothing tells."""
+    parse = TYPES[spec.type].parse
+    return partial(parse, decimal=column_decimal(column_values(sheet, col))) if spec.type == "money" else parse
+
+
+def header_value(sheet: Sheet, spec: FieldSpec, mapping: ColumnMapping):
+    """A field given in brackets in another column's header: 'Amount (USD)' -> 'USD' for currency.
+    Only as written in capitals, so 'Amount (net)' is not read as a currency 'NET'."""
+    col = mapping.columns.get(spec.from_header_of) if spec.from_header_of else None
+    header = next((h.header for h in sheet.headers if h.col == col), None) if col else None
+    for inner in CODE_IN_BRACKETS.findall(header or ""):
+        try:
+            return TYPES[spec.type].parse(inner, spec.label), col
+        except ValueError:
+            pass
+    return None, None
 
 
 def validate(sheet: Sheet, definition: Definition, mapping: ColumnMapping) -> list[str]:
@@ -101,9 +126,10 @@ def validate(sheet: Sheet, definition: Definition, mapping: ColumnMapping) -> li
             problems.append(f"{field}: column {col} has no values")
             continue
         ok = 0
+        parse = parser(sheet, spec, col)
         for v in values:
             try:
-                TYPES[spec.type].parse(v, spec.label)
+                parse(v, spec.label)
                 ok += 1
             except ValueError:
                 pass
@@ -114,9 +140,15 @@ def validate(sheet: Sheet, definition: Definition, mapping: ColumnMapping) -> li
 
 def apply_mapping(sheet: Sheet, definition: Definition, mapping: ColumnMapping) -> SampleLoadResult:
     """Every row below the header ends up exactly once: a typed row, an error, or a skipped footer
-    (blank rows are ignored). Raw cells are kept on all three."""
+    (blank rows are ignored). Raw cells are kept on all three; rows above the header are skipped."""
     index = {h.col: n for n, h in enumerate(sheet.headers)}
-    rows, errors, skipped = [], [], []
+    parsers = {f.name: parser(sheet, f, mapping.columns[f.name]) for f in definition.fields
+               if f.name in mapping.columns}
+    from_header = {f.name: header_value(sheet, f, mapping) for f in definition.fields
+                   if f.from_header_of and f.name not in mapping.columns}
+    rows, errors = [], []
+    skipped = [SkippedRow(row_number=r.excel_row, reason=f"above the header row {sheet.header_row}",
+                          raw=sheet.cells(r)) for r in sheet.preamble]
     for row in sheet.rows:
         if is_blank(row.values):
             continue
@@ -135,12 +167,17 @@ def apply_mapping(sheet: Sheet, definition: Definition, mapping: ColumnMapping) 
                     if clean_text(v):
                         row_id = TYPES[spec.type].parse(v, spec.label)
                     continue
-                if v in (None, "") or (isinstance(v, str) and not clean_text(v)):
-                    if spec.required:
-                        TYPES[spec.type].parse(v, spec.label)  # raises with the type's own message
-                    continue
                 t = TYPES[spec.type]
-                fields[spec.name] = FieldValue(type=t.name, value=t.to_str(t.parse(v, spec.label)), col=col)
+                if v in (None, "") or (isinstance(v, str) and not clean_text(v)):
+                    if col and (row.excel_row, col) in sheet.formulas:
+                        raise ValueError(f"{spec.label}: column {col} holds a formula that was never calculated "
+                                         "(open and save the file in Excel, then load it again)")
+                    if spec.required:
+                        t.parse(v, spec.label)  # raises with the type's own message
+                    if (hv := from_header.get(spec.name, (None, None)))[0] is not None:
+                        fields[spec.name] = FieldValue(type=t.name, value=t.to_str(hv[0]), col=f"header {hv[1]}")
+                    continue
+                fields[spec.name] = FieldValue(type=t.name, value=t.to_str(parsers[spec.name](v, spec.label)), col=col)
         except ValueError as e:
             errors.append(RowError(row_number=row.excel_row, message=str(e), raw=raw))
             continue
@@ -159,5 +196,5 @@ def resolve(sheet: Sheet, definition: Definition, saved: ColumnMapping | None = 
         if m is not None and m.headers_sha256 in ("", headers_sha256(sheet)) and not missing_required(definition, m):
             return m.model_copy(update={"headers_sha256": headers_sha256(sheet)}), []
     aliases = alias_mapping(sheet, definition)
-    missing = missing_required(definition, aliases)
+    missing = describe_missing(definition, aliases)
     return (None, missing) if missing else (aliases, [])

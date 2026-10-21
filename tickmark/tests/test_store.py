@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
+from tickmark.definitions import INVOICE_VOUCHING
 from tickmark.extract import LabelExtractor
 from tickmark.pipeline import run_vouch
 from tickmark.store import add_review, get_run, save_failed_run, save_run, scoped, verify_run
@@ -26,7 +27,7 @@ def _run(sample=GEN / "sample.xlsx", invoices=GEN / "invoices", labels=GEN / "la
         pytest.skip(f"{sample} missing")
     start, end = PERIOD[Path(sample).parent]
     return run_vouch(Path(sample), Path(invoices), LabelExtractor(Path(labels)),
-                     VouchPolicy(period_start=start, period_end=end))
+                     VouchPolicy(period_start=start, period_end=end, currency="EUR"))
 
 
 def _save(t, run, ctx=None):
@@ -62,8 +63,8 @@ def test_issues_are_stored_so_no_row_is_lost(tenancy):
 @pytest.mark.parametrize("table", AUDIT_TABLES)
 def test_audit_tables_are_append_only_for_the_app_and_even_for_the_owner(tenancy, table):
     t = tenancy
-    run_id = _save(t, _run())
-    add_review(t.coke, run_id, "1", decision="accept", db=t.app)  # so every table has a row to attack
+    run_id = _save(t, _run(GEN / "sample_messy.xlsx"))  # messy: issue rows too, so every table has a row
+    add_review(t.coke, run_id, "1", decision="accept", db=t.app)
     col = "tenant_id"
     for sql in (f"UPDATE {table} SET {col} = {col}", f"DELETE FROM {table}", f"TRUNCATE {table} CASCADE"):
         with pytest.raises(DBAPIError, match="permission denied"), scoped(t.coke, t.app) as c:  # the app: no grant
@@ -156,17 +157,17 @@ def test_confirmed_mapping_is_saved_reused_and_verified(tenancy, tmp_path):
     t = tenancy
     write_unfamiliar(GEN / "sample.xlsx", tmp_path)
     sheet = read_sheet(tmp_path / "sample.xlsx")
-    m = ColumnMapping(definition="invoice_vouching", version=1, columns=EXPECTED, source="person",
+    m = ColumnMapping(definition="invoice_vouching", version=INVOICE_VOUCHING.version, columns=EXPECTED, source="person",
                       confirmed_by="ali", headers_sha256=headers_sha256(sheet))
     mid = save_mapping(t.pepsi, m, sheet.headers, db=t.app)
     assert save_mapping(t.pepsi, m, sheet.headers, db=t.app) == mid  # identical: reused, not duplicated
-    found = current_mapping(t.pepsi, "invoice_vouching", 1, headers_sha256(sheet), db=t.app)
+    found = current_mapping(t.pepsi, "invoice_vouching", INVOICE_VOUCHING.version, headers_sha256(sheet), db=t.app)
     assert found.columns == EXPECTED and found.confirmed_by == "ali"
-    assert current_mapping(t.coke, "invoice_vouching", 1, headers_sha256(sheet), db=t.app) is None  # per engagement
+    assert current_mapping(t.coke, "invoice_vouching", INVOICE_VOUCHING.version, headers_sha256(sheet), db=t.app) is None  # per engagement
 
     start, end = PERIOD[GEN]
     run = run_vouch(tmp_path / "sample.xlsx", GEN / "invoices", LabelExtractor(GEN / "labels"),
-                    VouchPolicy(period_start=start, period_end=end), found)
+                    VouchPolicy(period_start=start, period_end=end, currency="EUR"), found)
     run_id = _save(t, run, t.pepsi)
     stored = get_run(t.pepsi, run_id, t.app)
     assert stored.run["mapping_id"] == mid and stored.run["definition"]["name"] == "invoice_vouching"
@@ -186,6 +187,6 @@ def test_unconfirmed_claude_mapping_cannot_be_stored(tenancy):
     from tickmark.fields.mapping import ColumnMapping
     from tickmark.store.mappings import save_mapping
 
-    m = ColumnMapping(definition="invoice_vouching", version=1, columns={"amount": "D"}, source="claude")
+    m = ColumnMapping(definition="invoice_vouching", version=INVOICE_VOUCHING.version, columns={"amount": "D"}, source="claude")
     with pytest.raises(IntegrityError, match="column_mappings_confirmed"):
         save_mapping(tenancy.coke, m, [], db=tenancy.app)

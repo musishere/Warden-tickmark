@@ -6,13 +6,14 @@ Roles drive the generic engine (tickmark.match.identify, tickmark.vouch.compare)
   party         who the claim is with (vendor): equal + a corroborating field -> can link
   corroborating supports a link (amount, date)
   label         the auditor's own id for the row; never compared
+  attribute     compared when vouching (currency), never used to link a row to a PDF
 """
 import hashlib
 import json
 from dataclasses import asdict, dataclass, field
 from typing import Literal
 
-Role = Literal["key", "party", "corroborating", "label"]
+Role = Literal["key", "party", "corroborating", "label", "attribute"]
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,10 @@ class FieldSpec:
     evidence_field: str | None = None  # the extracted document field it is compared with
     aliases: frozenset[str] = frozenset()  # header names that map without asking anyone
     description: str = ""  # for people and for the mapping proposal
+    # an empty row value is unverifiable, never skipped: a claim that cannot be checked is not ✅
+    compare_when_empty: bool = False
+    # with no column of its own, read from "(XXX)" in the header of this field's column ("Amount (USD)")
+    from_header_of: str | None = None
 
 
 @dataclass(frozen=True)
@@ -52,6 +57,11 @@ class Definition:
         """Fields compared with the evidence, in trace order."""
         return [f for f in self.fields if f.evidence_field]
 
+    @property
+    def linking(self) -> list[FieldSpec]:
+        """Compared fields that decide which PDF a row is about (attributes never do)."""
+        return [f for f in self.compared if f.role != "attribute"]
+
     def snapshot(self) -> dict:
         """Recorded with every run, so an old result can be explained after the definition changes."""
         d = asdict(self)
@@ -63,7 +73,7 @@ class Definition:
 
 INVOICE_VOUCHING = Definition(
     name="invoice_vouching",
-    version=1,
+    version=2,  # 2: currency compared
     evidence="invoice",
     fields=(
         FieldSpec("row_id", "identifier", "label", "row id",
@@ -81,6 +91,10 @@ INVOICE_VOUCHING = Definition(
         FieldSpec("invoice_date", "date", "corroborating", "date", required=True, evidence_field="invoice_date",
                   aliases=frozenset({"date", "invoice date"}),
                   description="the invoice date"),
+        FieldSpec("currency", "currency", "attribute", "currency", evidence_field="currency",
+                  aliases=frozenset({"currency", "ccy", "cur", "currency code"}),
+                  description="the currency of the amount (three-letter code)",
+                  compare_when_empty=True, from_header_of="amount"),
     ),
     checks=("totals_reconcile", "lines_sum", "vat_rate", "in_period", "duplicate"),
     reconcile={"total": ("subtotal", "tax")},

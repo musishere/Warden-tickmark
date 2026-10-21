@@ -15,7 +15,8 @@ def test_parse_fields_confidence_and_snips():
     inv = parse_result(json.loads(FIXTURE.read_text()), "INV-2026-1222.pdf")
     assert {k: f.value for k, f in inv.fields.items()} == {
         "vendor": "Pinewood IT Solutions BV", "invoice_number": "INV-2026-1222",
-        "invoice_date": "2026-01-16", "subtotal": "7092.84", "tax": "1489.5", "total": "8682.34"}
+        "invoice_date": "2026-01-16", "subtotal": "7092.84", "tax": "1489.5", "total": "8682.34",
+        "currency": "EUR"}
     total = inv.get("total")
     assert total.confidence == 0.95 and total.snip.text == "€ 8,682.34" and total.snip.page == 1
     # polygon in inches -> bbox in points

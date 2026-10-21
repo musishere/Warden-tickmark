@@ -11,6 +11,7 @@ class VouchPolicy(BaseModel):
     period_end: date | None = None
     vat_rates: list[Decimal] = Field(default_factory=lambda: [Decimal(0), Decimal("0.09"), Decimal("0.21")])
     amount_tol: Decimal = Decimal("0.01")  # any difference above this is ⚠️ (the auditor judges materiality)
+    currency: str | None = None  # the engagement's currency, for rows that do not state one
 
 
 def parse_period(text: str) -> tuple[date, date]:

@@ -5,7 +5,7 @@ services:
       POSTGRES_USER: warden
       POSTGRES_PASSWORD: warden
       POSTGRES_DB: warden
-    ports: ["5432:5432"]
+    ports: ["5433:5432"]  # 5432 is taken by a local PostgreSQL
     volumes: [pgdata:/var/lib/postgresql/data]
 volumes:
   pgdata:
