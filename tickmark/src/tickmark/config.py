@@ -21,6 +21,14 @@ class Settings(BaseSettings):
     llm_mapping_model: str = ""
     llm_timeout_seconds: float = 120
     header_scan_rows: int = 20  # the header row is looked for in this many non-blank rows at the top
+    # Reading PDFs: locally from their own text first; Azure only where that is not reliable.
+    azure: str = "auto"  # auto: only where needed | off: never (those rows are 👀) | always: every PDF
+    pdf_min_chars: int = 30  # a page with fewer text characters but an image is a scan
+    pdf_image_cover: float = 0.7  # text over an image covering this share of the page is a scanner's OCR
+    pdf_bad_chars: float = 0.02  # more unreadable characters than this share: the font has no text map
+    pdf_rotated: float = 0.2  # more rotated characters than this share: a sideways scan or table
+    pdf_word_gap: float = 15  # points between words that start a new block on the same line
+    pdf_letterhead_share: float = 0.33  # the issuer's letterhead is never lower than this share of page 1
     evidence_dir: str = "data/store"  # content-addressed copies of every file a run used
 
 

@@ -13,7 +13,7 @@ src/tickmark/          the application (the only code that ships)
   api/                 FastAPI app
   sample/              auditor's Excel sample: loader.py (read) + cleaner.py (keys, flags)
   checks/              deterministic pass/fail checks
-  extract/             read invoice PDFs (Azure Document Intelligence; labels for tests)
+  extract/             read invoice PDFs: own text first (local.py), Azure only where needed (router.py)
   match/               which PDF each row is about (identify.py)
   vouch/               does that PDF back the row's claim: ✅ / ⚠️ / 👀 / ❓
   store/               append-only audit trail in Postgres + evidence store
@@ -29,7 +29,8 @@ tools/                 developer tooling, not shipped
   eval_vouch.py        verdicts vs labels, defects found per check (false ✅ must be 0)
   show_run.py review.py verify_run.py   read a stored run, add a human review, verify evidence
   tenants.py           register audit firms (tenants) and client engagements
-  map_columns.py       which column holds which field, once per client (an LLM can suggest)
+  map_columns.py       which column means what, once per client (an LLM can suggest, incl. new meanings)
+  compare_readers.py   local reading vs Azure on the same PDFs (calibration; needs the Azure key)
 migrations/            Alembic: audit tables, append-only triggers, multi-tenant row-level security
 docker/initdb/         creates the tickmark_app database role (dev)
 tests/                 pytest, one file per area
@@ -72,9 +73,24 @@ python -m tools.identify_sample data/external/tickmark-sample/sample.xlsx \
 ```
 Azure results are cached in `data/cache/docint/` (one call per PDF, ever).
 
+## Reading the PDFs: own text first, Azure only where needed
+Each PDF is read from its own text (free). It goes to Azure only when it cannot be read that way
+(a scan or photo, text over a full-page image, unreadable or rotated text) or when a value a row
+needs was not found clearly (no label, two different totals, a number shared with another invoice
+whose vendor is unknown). A value read differently by both is trusted by neither. `--azure off`
+never calls Azure: those rows stay 👀/❓ with the reason. The item-lines check needs Azure for every
+linked invoice, so it is off unless the engagement turns it on (`tools.tenants set-line-items`).
+Each stored run records how every PDF was read and why Azure was needed.
+```bash
+python -m tools.vouch_sample SAMPLE.xlsx INVOICE_DIR --azure off      # never Azure
+python -m tools.eval_vouch --azure off --no-line-items                 # own text only, on the test sets
+python -m tools.compare_readers INVOICE_DIR                            # local vs Azure (needs the key)
+```
+
 ## Does the PDF back the row's claim?
-`tickmark.vouch` compares the row's vendor, amount, currency, date and invoice number with its linked
-PDF and runs the invoice's own checks (totals, lines, VAT rate, audit period, duplicates). Any
+`tickmark.vouch` compares every column the mapping gave a meaning (vendor, amount, currency, date,
+invoice number, net, VAT, PO, the layout's own meanings) with its linked PDF and runs the invoice's
+own checks (totals, item lines if on, VAT rate, audit period, duplicates). Any
 difference over 0.01 is ⚠️; anything that cannot be verified is 👀, never ✅. See [docs/PROGRESS.md](docs/PROGRESS.md) §8.
 The row's currency comes from a currency column, else `(XXX)` in the amount header (`Amount (USD)`),
 else the engagement's currency (`--currency`, or `tools.tenants set-currency`). The PDF's comes from
@@ -85,11 +101,14 @@ python -m tools.eval_vouch --labels
 ```
 
 ## Any spreadsheet layout
-Known headers map automatically, unless two columns could hold the same field ("Amount" and
-"Total"): then it is never guessed. For anything else, map the columns once per client; the mapping
-is saved and reused for that header layout. An LLM (any OpenAI-compatible API, OpenRouter in
-`.env.example`) can suggest it from headers and value patterns (no values leave unless you
-separately allow it). Title rows above the header are found and kept. Text amounts follow the
+No column is required. Each column gets a meaning: a known one (invoice number, vendor, amount,
+date, net, VAT, PO, currency, …) or one the layout adds (`--meaning cost_centre=text:"Cost centre"`).
+A run only needs enough to identify an invoice: the invoice number plus one more column, or the
+vendor plus the amount or date. Known headers map automatically, unless two columns could hold the
+same meaning ("Amount" and "Total"): then it is never guessed and the run waits for a choice. For
+anything else, map the columns once per client; the mapping is saved and reused for that header
+layout. An LLM (any OpenAI-compatible API, OpenRouter in `.env.example`) can suggest it, including
+new meanings, from headers and value patterns (no values leave unless you separately allow it). Title rows above the header are found and kept. Text amounts follow the
 column's own decimal mark; one that reads two ways (`1.234`) is refused, never guessed.
 See [docs/PROGRESS.md](docs/PROGRESS.md) §9.
 ```bash

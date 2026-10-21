@@ -12,19 +12,21 @@ import json
 import sys
 from datetime import date
 
-from tickmark.extract import DocIntExtractor, LabelExtractor
 from tickmark.pipeline import run_vouch
 from tickmark.vouch import MARK, VouchPolicy, check_invoice, duplicate_map
 from tools.eval_identify import EXT, GEN, HARD
+from tools.reader_args import add_reader_args, make_reader, print_routes
 
 Y2025, Y2026 = (date(2025, 1, 1), date(2025, 12, 31)), (date(2026, 1, 1), date(2026, 12, 31))
 CHECK_DEFECT = {"lines_sum": "lines_dont_sum", "vat_rate": "vat_wrong", "in_period": "date_out_of_period",
                 "duplicate": "duplicate_number", "totals_reconcile": "totals_dont_reconcile"}
 
 
-def truth_generated() -> dict[str, str]:
-    """Labels say whether the row differs from its invoice; an invoice defect also makes it ⚠️."""
-    defects = {p.stem + ".pdf": json.loads(p.read_text())["defects"] for p in (GEN / "labels").glob("invoice_*.json")}
+def truth_generated(line_items: bool = True) -> dict[str, str]:
+    """Labels say whether the row differs from its invoice; an invoice defect also makes it ⚠️ -
+    item lines that do not add up only when that check is on."""
+    defects = {p.stem + ".pdf": [d for d in json.loads(p.read_text())["defects"] if line_items or d != "lines_dont_sum"]
+               for p in (GEN / "labels").glob("invoice_*.json")}
     out = {}
     for s in json.loads((GEN / "labels" / "sample_labels.json").read_text()):
         if s["expected"] == "no_evidence":
@@ -35,11 +37,11 @@ def truth_generated() -> dict[str, str]:
     return out
 
 
-def truth_external() -> dict[str, str]:
+def truth_external(line_items: bool = True) -> dict[str, str]:
     return {e["row_id"]: e["expected_status"] for e in json.loads((EXT / "expected_results.json").read_text())}
 
 
-def truth_hard() -> dict[str, str]:
+def truth_hard(line_items: bool = True) -> dict[str, str]:
     return {t["row_id"]: {"link": "matched", "review": "needs_review", "none": "no_evidence"}[t["expect"]]
             for t in json.loads((HARD / "truth.json").read_text())}
 
@@ -66,15 +68,16 @@ def defect_truth(run) -> dict[str, set[str]]:
             for f, lab in labels.items()}
 
 
-def evaluate(name: str, use_labels: bool) -> int:
+def evaluate(name: str, use_labels: bool, azure: str = "auto", line_items: bool = True) -> int:
     base, period, truth_fn = DATASETS[name]
     if not (base / "sample.xlsx").exists():
         print(f"{name}: skipped ({base} missing)\n")
         return 0
-    extractor = LabelExtractor(base / "labels") if use_labels else DocIntExtractor()
+    extractor = make_reader(base / "labels" if use_labels else None, azure)
     run = run_vouch(base / "sample.xlsx", base / "invoices", extractor,
-                    VouchPolicy(period_start=period[0], period_end=period[1], currency=dataset_currency(base)))
-    truth = truth_fn()
+                    VouchPolicy(period_start=period[0], period_end=period[1], currency=dataset_currency(base),
+                                line_items=line_items))
+    truth = truth_fn(line_items)
     right = false_ok = 0
     print(f"== {name} ({len(run.verdicts)} rows)")
     for v in run.verdicts:
@@ -87,6 +90,7 @@ def evaluate(name: str, use_labels: bool) -> int:
                   f"expected {MARK[want]} {want} | {'; '.join(v.reasons)[:120]}")
     counts = " | ".join(f"{MARK[k]} {sum(v.verdict == k for v in run.verdicts)}" for k in MARK)
     print(f"   verdicts {right}/{len(run.verdicts)} as labelled | false ✅ {false_ok} | {counts}")
+    print_routes(run)
 
     if name == "generated":  # every PDF, linked or not: do the checks find the labelled defects?
         want_by_file, dups = defect_truth(run), duplicate_map(run.extracted)
@@ -107,11 +111,15 @@ def evaluate(name: str, use_labels: bool) -> int:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--labels", action="store_true", help="extract from label JSON instead of Azure")
+    ap.add_argument("--labels", action="store_true", help="extract from label JSON (perfect extraction)")
+    ap.add_argument("--line-items", action=argparse.BooleanOptionalAction, default=True,
+                    help="check item lines (default on here, to measure every check)")
+    add_reader_args(ap)
     ap.add_argument("datasets", nargs="*", choices=list(DATASETS), help="default: all")
     args = ap.parse_args()
-    print(f"extraction: {'labels (perfect, tests the rules only)' if args.labels else 'Azure Document Intelligence'}\n")
-    false_ok = sum(evaluate(d, args.labels) for d in args.datasets or DATASETS)
+    print(f"extraction: {'labels (perfect, tests the rules only)' if args.labels else f'own text, Azure {args.azure}'}"
+          f" | item lines {'on' if args.line_items else 'off'}\n")
+    false_ok = sum(evaluate(d, args.labels, args.azure, args.line_items) for d in args.datasets or DATASETS)
     print("✅ no false ✅" if not false_ok else f"❌ {false_ok} false ✅")
     sys.exit(1 if false_ok else 0)
 

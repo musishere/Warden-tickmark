@@ -11,7 +11,7 @@ from uuid import UUID
 from sqlalchemy import Connection, Engine, select
 from sqlalchemy.dialects.postgresql import insert
 
-from tickmark.definitions import DEFINITIONS, INVOICE_VOUCHING
+from tickmark.definitions import INVOICE_VOUCHING
 from tickmark.match.identify import THRESHOLDS
 from tickmark.models import ExtractedInvoice, Identification
 from tickmark.pipeline import IdentificationRun
@@ -104,7 +104,7 @@ def save_run(run: IdentificationRun, ctx: TenantContext, *, started_at: datetime
     """Store a finished run in ctx's engagement: documents (by hash), extractions, rows, issues,
     results. One transaction: all of it or nothing."""
     loaded = run.loaded
-    definition = DEFINITIONS[run.cleaned.rows[0].row.definition] if run.cleaned.rows else INVOICE_VOUCHING
+    definition = run.loaded.definition or INVOICE_VOUCHING
     model_ids = sorted({inv.model_id for inv in run.extracted if inv.model_id})
     scope = _scope(ctx)
     with scoped(ctx, db) as conn:
@@ -124,8 +124,10 @@ def save_run(run: IdentificationRun, ctx: TenantContext, *, started_at: datetime
         for path, inv in zip(run.invoice_files, run.extracted, strict=True):
             doc_id = _document(conn, ctx, path, "pdf", _pages(inv))
             doc_ids[inv.file] = doc_id
+            read_by, why = run.routes.get(inv.file, (inv.extractor or "unknown", ""))
             conn.execute(run_documents.insert().values(**scope, run_id=run_id, document_id=doc_id, file_name=inv.file,
-                                                       extraction_id=_extraction(conn, ctx, doc_id, inv)))
+                                                       extraction_id=_extraction(conn, ctx, doc_id, inv),
+                                                       read_by=read_by, read_reason=why or None))
 
         row_ids: dict[int, UUID] = {}
         flags = {cr.row.excel_row: cr for cr in run.cleaned.rows}

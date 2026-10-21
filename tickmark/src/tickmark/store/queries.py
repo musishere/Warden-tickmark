@@ -80,6 +80,7 @@ def get_run(ctx: TenantContext, run_id: UUID | str, db: Engine | None = None) ->
                               ).mappings().one_or_none()
         files = [dict(r) for r in conn.execute(
             select(run_documents.c.file_name, run_documents.c.document_id, run_documents.c.extraction_id,
+                   run_documents.c.read_by, run_documents.c.read_reason,
                    documents.c.sha256, documents.c.storage_path, extractions.c.fields, extractions.c.line_items,
                    extractions.c.extractor,
                    extractions.c.model_id, extractions.c.raw_sha256)
@@ -145,6 +146,13 @@ def engagement_currency(ctx: TenantContext, db: Engine | None = None) -> str | N
     with scoped(ctx, db) as conn:
         return conn.execute(select(engagements.c.currency)
                             .where(engagements.c.id == ctx.engagement_id)).scalar_one_or_none()
+
+
+def engagement_line_items(ctx: TenantContext, db: Engine | None = None) -> bool:
+    """Whether ctx's engagement checks item lines (needs Azure for every linked invoice)."""
+    with scoped(ctx, db) as conn:
+        return bool(conn.execute(select(engagements.c.line_items)
+                                 .where(engagements.c.id == ctx.engagement_id)).scalar_one_or_none())
 
 
 def add_review(ctx: TenantContext, run_id: UUID | str, row_id: str, *, decision: str,

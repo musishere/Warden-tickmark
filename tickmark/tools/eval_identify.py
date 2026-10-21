@@ -14,6 +14,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 from tools.identify_sample import run
+from tools.reader_args import add_reader_args
 
 GEN, EXT, HARD = Path("data/generated"), Path("data/external/tickmark-sample"), Path("data/generated/hard")
 
@@ -48,13 +49,13 @@ DATASETS = {
 OUTCOME = {"linked": "link", "needs_review": "review", "no_evidence": "none"}
 
 
-def evaluate(name: str, use_labels: bool) -> int:
+def evaluate(name: str, use_labels: bool, azure: str = "auto") -> int:
     sample, invoices, labels, truth_fn = DATASETS[name]
     if not sample.exists():
         print(f"{name}: skipped ({sample} missing)\n")
         return 0
     truth = truth_fn()
-    results, _ = run(sample, invoices, labels if use_labels else None)
+    results, _ = run(sample, invoices, labels if use_labels else None, azure)
     wrong = correct = missed = safe = 0
     print(f"== {name} ({len(results)} rows)")
     for r in results:
@@ -81,11 +82,12 @@ def evaluate(name: str, use_labels: bool) -> int:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--labels", action="store_true", help="extract from label JSON instead of Azure")
+    ap.add_argument("--labels", action="store_true", help="extract from label JSON (perfect extraction)")
+    add_reader_args(ap)
     ap.add_argument("datasets", nargs="*", choices=list(DATASETS), help="default: all")
     args = ap.parse_args()
-    print(f"extraction: {'labels (perfect, tests matching only)' if args.labels else 'Azure Document Intelligence'}\n")
-    wrong = sum(evaluate(d, args.labels) for d in args.datasets or DATASETS)
+    print(f"extraction: {'labels (perfect, tests matching only)' if args.labels else f'own text, Azure {args.azure}'}\n")
+    wrong = sum(evaluate(d, args.labels, args.azure) for d in args.datasets or DATASETS)
     print("✅ no wrong links" if not wrong else f"❌ {wrong} wrong link(s)")
     sys.exit(1 if wrong else 0)
 

@@ -22,6 +22,5 @@ def test_llm_maps_unfamiliar_headers_without_values(tmp_path):
     sheet = read_sheet(tmp_path / "sample.xlsx")
     proposal = LLMProposer(send_values=False).propose(sheet, INVOICE_VOUCHING)
     assert proposal is not None and proposal.sent_values is False
-    required = {f.name for f in INVOICE_VOUCHING.required}
-    assert {f: c for f, c in proposal.columns.items() if f in required} == {f: EXPECTED[f] for f in required}
+    assert {f: c for f, c in proposal.columns.items() if f in EXPECTED} == EXPECTED
     assert validate(sheet, INVOICE_VOUCHING, to_mapping(sheet, INVOICE_VOUCHING, proposal)) == []

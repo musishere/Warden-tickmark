@@ -11,6 +11,7 @@ Everything is linked by UUID and by SHA-256 of file content, never by file name.
 """
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     Column,
     Date,
@@ -25,6 +26,7 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    false,
     func,
     text,
 )
@@ -79,6 +81,7 @@ engagements = Table(
     Column("period_start", Date),  # the audit period (Warden's); invoice dates are checked against it
     Column("period_end", Date),
     Column("currency", Text),  # three-letter code: the amounts' currency when a row does not say
+    Column("line_items", Boolean, nullable=False, server_default=false()),  # check item lines (needs Azure)
     UniqueConstraint("tenant_id", "id", name="engagements_scoped_key"),
     CheckConstraint("period_end >= period_start", name="engagements_period_order"),
     CheckConstraint("currency ~ '^[A-Z]{3}$'", name="engagements_currency_code"),
@@ -127,6 +130,7 @@ column_mappings = Table(
     Column("headers", JSONB, nullable=False),  # the header row it was made for: [{col, header}]
     Column("headers_sha256", Text, nullable=False),
     Column("columns", JSONB, nullable=False),  # field -> column letter
+    Column("meanings", JSONB, nullable=False, server_default=text("'{}'::jsonb")),  # the layout's own meanings
     Column("source", Text, nullable=False),  # aliases | claude | person
     Column("notes", JSONB, nullable=False, server_default=text("'{}'::jsonb")),  # field -> reason
     Column("proposal", JSONB),  # what was sent to and returned by the LLM, if it proposed
@@ -168,6 +172,8 @@ run_documents = Table(
     Column("document_id", UUID(as_uuid=True), nullable=False),
     Column("file_name", Text, nullable=False),  # as named in this run
     Column("extraction_id", UUID(as_uuid=True), nullable=False),
+    Column("read_by", Text),  # local | azure
+    Column("read_reason", Text),  # why Azure was needed
     # keyed by name: the same bytes may appear twice in one folder under two names
     PrimaryKeyConstraint("run_id", "file_name"),
     _link("run_documents", "run_id", "runs"),

@@ -23,6 +23,9 @@ FIELD_MAP = {
     "InvoiceTotal": ("total", "currency"),
     "SubTotal": ("subtotal", "currency"),
     "TotalTax": ("tax", "currency"),
+    "CustomerName": ("customer", "string"),
+    "DueDate": ("due_date", "date"),
+    "PurchaseOrder": ("po_number", "string"),
 }
 
 
@@ -90,6 +93,24 @@ def parse_result(result: dict, file: str) -> ExtractedInvoice:
                                             snip=_snip(total, units))
     items = ((docs[0].get("fields") or {}).get("Items") or {}).get("valueArray") or []
     return ExtractedInvoice(file=file, fields=fields, line_items=[_line(i, units) for i in items], **meta)
+
+
+def ocr_words(result: dict) -> list[tuple[int, float, list[dict]]]:
+    """The words Azure's OCR read, per page, in points with origin top-left: (page, height, words)
+    with words as {text, x0, x1, top, bottom} - the shape tickmark.extract.local reads labels from."""
+    result = result.get("analyzeResult", result)
+    pages = []
+    for page in result.get("pages") or []:
+        scale = POINTS_PER_UNIT.get(page.get("unit"), 1.0)
+        words = []
+        for w in page.get("words") or []:
+            poly = w.get("polygon") or []
+            if w.get("content") and poly:
+                xs, ys = poly[0::2], poly[1::2]
+                words.append({"text": w["content"], "x0": min(xs) * scale, "x1": max(xs) * scale,
+                              "top": min(ys) * scale, "bottom": max(ys) * scale})
+        pages.append((page.get("pageNumber"), (page.get("height") or 0) * scale, words))
+    return pages
 
 
 def _line(item: dict, units: dict) -> ExtractedLineItem:

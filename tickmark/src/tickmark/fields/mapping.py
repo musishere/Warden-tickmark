@@ -1,11 +1,14 @@
-"""Their columns -> our fields. A mapping says which column of a sheet holds each field of an audit
-definition; applying it turns raw cells into typed values (or a row issue with a reason).
+"""Their columns -> our fields. A mapping says which column of a sheet holds which meaning (a field
+of the definition's catalogue, or a meaning the layout adds); applying it turns raw cells into typed
+values (or a row issue with a reason). No column is required: cannot_run says when too little is
+mapped to identify an invoice.
 
 Where a mapping comes from (recorded as `source`): a saved, confirmed one for the same client and
 header row; header aliases; a proposal (an LLM) confirmed by a person; or a person alone.
 """
 import hashlib
 import json
+import re
 from functools import partial
 from typing import Literal
 
@@ -20,10 +23,20 @@ FOOTER_WORDS = {"total", "subtotal", "sub total", "grand total", "sum", "totals"
 MIN_PARSE_RATE = 0.8  # a proposed column must parse as its type for at least this share of its values
 
 
+class Meaning(BaseModel):
+    """A meaning a client layout adds to the catalogue: a fact printed on the document that the
+    definition does not know ('cost centre'), compared like any other value of its type."""
+
+    type: str  # a tickmark.fields.types name
+    labels: list[str]  # words printed next to the value on the document, to find it there
+    description: str = ""
+
+
 class ColumnMapping(BaseModel):
     definition: str
     version: int
     columns: dict[str, str]  # field name -> column letter
+    meanings: dict[str, Meaning] = Field(default_factory=dict)  # the layout's own meanings, by field name
     source: Literal["aliases", "saved", "claude", "person"]
     confirmed_by: str | None = None
     headers_sha256: str = ""  # which header row it was made for
@@ -55,13 +68,27 @@ def alias_mapping(sheet: Sheet, definition: Definition) -> ColumnMapping:
                          source="aliases", headers_sha256=headers_sha256(sheet), notes=notes)
 
 
-def missing_required(definition: Definition, mapping: ColumnMapping) -> list[str]:
-    return [f.name for f in definition.required if f.name not in mapping.columns]
+def runtime_definition(definition: Definition, mapping: ColumnMapping | None) -> Definition:
+    """The definition a run uses: the catalogue plus the meanings this layout adds."""
+    if mapping is None or not mapping.meanings:
+        return definition
+    return definition.with_meanings({n: m.model_dump() for n, m in mapping.meanings.items()})
 
 
-def describe_missing(definition: Definition, mapping: ColumnMapping) -> list[str]:
-    """missing_required, each with why when known: 'amount (ambiguous: could be C 'Amount' or D 'Total')'."""
-    return [f"{f} ({mapping.notes[f]})" if f in mapping.notes else f for f in missing_required(definition, mapping)]
+def cannot_run(definition: Definition, mapping: ColumnMapping) -> list[str]:
+    """Why a run cannot start with this mapping, or [] when it can. No column is required, but the
+    mapped columns must be able to identify an invoice: a key (invoice number) plus one more
+    linking column, or a party (vendor) plus a corroborating one (amount, date). A meaning two
+    columns could hold must be settled first: the sheet has it, so it is not left unchecked."""
+    mapped = set(mapping.columns)
+    unclear = [f"{f} is {n}" for f, n in mapping.notes.items() if f not in mapped and n.startswith("ambiguous")]
+    key, party, corr = (definition.by_role(r) for r in ("key", "party", "corroborating"))
+    has = lambda specs: any(s.name in mapped for s in specs)
+    if (has(key) and (has(party) or has(corr))) or (has(party) and has(corr)):
+        return unclear
+    names = lambda specs: " or ".join(s.name for s in specs)
+    return [(f"cannot identify an invoice: map the {names(key)} plus the {names(party + corr)}, or the "
+             f"{names(party)} plus the {names(corr)} (mapped: {', '.join(sorted(mapped)) or 'nothing'})"), *unclear]
 
 
 def _footer_label(values: list) -> str | None:
@@ -107,6 +134,19 @@ def header_value(sheet: Sheet, spec: FieldSpec, mapping: ColumnMapping):
 def validate(sheet: Sheet, definition: Definition, mapping: ColumnMapping) -> list[str]:
     """Problems with a mapping, checked against every value of the sheet. Empty = usable."""
     problems: list[str] = []
+    catalogue = {f.name for f in definition.fields}
+    for name, m in mapping.meanings.items():
+        if name in catalogue:
+            problems.append(f"{name}: already a meaning of {definition.name}, map it without defining it")
+        elif not re.fullmatch(r"[a-z][a-z0-9_]*", name):
+            problems.append(f"{name}: a meaning's name is lower-case letters, digits and _")
+        elif m.type not in TYPES:
+            problems.append(f"{name}: unknown type {m.type!r} (one of {', '.join(TYPES)})")
+        elif not [label for label in m.labels if clean_text(label)]:
+            problems.append(f"{name}: give at least one label printed next to it on the document")
+    if problems:
+        return problems  # values cannot be read with a meaning that is not sound
+    definition = runtime_definition(definition, mapping)
     cols = {h.col for h in sheet.headers}
     names = {f.name for f in definition.fields}
     for field, col in mapping.columns.items():
@@ -116,7 +156,7 @@ def validate(sheet: Sheet, definition: Definition, mapping: ColumnMapping) -> li
             problems.append(f"{field}: column {col} does not exist")
     used = [c for c in mapping.columns.values()]
     problems += [f"column {c} is used for more than one field" for c in sorted({c for c in used if used.count(c) > 1})]
-    problems += [f"{f}: required but not mapped" for f in missing_required(definition, mapping)]
+    problems += cannot_run(definition, mapping)
     for field, col in mapping.columns.items():
         if field not in names or col not in cols:
             continue
@@ -140,7 +180,10 @@ def validate(sheet: Sheet, definition: Definition, mapping: ColumnMapping) -> li
 
 def apply_mapping(sheet: Sheet, definition: Definition, mapping: ColumnMapping) -> SampleLoadResult:
     """Every row below the header ends up exactly once: a typed row, an error, or a skipped footer
-    (blank rows are ignored). Raw cells are kept on all three; rows above the header are skipped."""
+    (blank rows are ignored). Raw cells are kept on all three; rows above the header are skipped.
+    An empty cell in a mapped party or corroborating column (vendor, amount, date) is a row error:
+    without it the row cannot be linked the way the layout promises."""
+    definition = runtime_definition(definition, mapping)
     index = {h.col: n for n, h in enumerate(sheet.headers)}
     parsers = {f.name: parser(sheet, f, mapping.columns[f.name]) for f in definition.fields
                if f.name in mapping.columns}
@@ -172,7 +215,7 @@ def apply_mapping(sheet: Sheet, definition: Definition, mapping: ColumnMapping) 
                     if col and (row.excel_row, col) in sheet.formulas:
                         raise ValueError(f"{spec.label}: column {col} holds a formula that was never calculated "
                                          "(open and save the file in Excel, then load it again)")
-                    if spec.required:
+                    if col and spec.role in ("party", "corroborating"):
                         t.parse(v, spec.label)  # raises with the type's own message
                     if (hv := from_header.get(spec.name, (None, None)))[0] is not None:
                         fields[spec.name] = FieldValue(type=t.name, value=t.to_str(hv[0]), col=f"header {hv[1]}")
@@ -184,17 +227,18 @@ def apply_mapping(sheet: Sheet, definition: Definition, mapping: ColumnMapping) 
         rows.append(SampleRow(row_id=row_id, excel_row=row.excel_row, definition=definition.name,
                               fields=fields, raw=raw))
     return SampleLoadResult(rows=rows, errors=errors, skipped=skipped, sheet=sheet.title, headers=sheet.headers,
-                            mapping=mapping)
+                            mapping=mapping, definition=definition)
 
 
 def resolve(sheet: Sheet, definition: Definition, saved: ColumnMapping | None = None,
             given: ColumnMapping | None = None) -> tuple[ColumnMapping | None, list[str]]:
     """The mapping a run uses, in order: one given explicitly (a confirmed file); a confirmed
-    mapping saved for this exact header layout; the header aliases if they cover every required
-    field. Otherwise (None, the fields still missing): the run must not start."""
+    mapping saved for this exact header layout; the header aliases if they can identify an invoice.
+    Otherwise (None, why not): the run must not start."""
     for m in (given, saved):
-        if m is not None and m.headers_sha256 in ("", headers_sha256(sheet)) and not missing_required(definition, m):
+        if m is not None and m.headers_sha256 in ("", headers_sha256(sheet)) \
+                and not cannot_run(runtime_definition(definition, m), m):
             return m.model_copy(update={"headers_sha256": headers_sha256(sheet)}), []
     aliases = alias_mapping(sheet, definition)
-    missing = describe_missing(definition, aliases)
-    return (None, missing) if missing else (aliases, [])
+    problems = cannot_run(definition, aliases)
+    return (None, problems) if problems else (aliases, [])

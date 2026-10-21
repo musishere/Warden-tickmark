@@ -21,7 +21,7 @@ from tools.eval_vouch import dataset_currency
 
 ROOT = Path(__file__).resolve().parents[1]
 GEN, EXT, HARD = ROOT / "data/generated", ROOT / "data/external/tickmark-sample", ROOT / "data/generated/hard"
-Y2025 = VouchPolicy(period_start=date(2025, 1, 1), period_end=date(2025, 12, 31), currency="EUR")
+Y2025 = VouchPolicy(period_start=date(2025, 1, 1), period_end=date(2025, 12, 31), currency="EUR", line_items=True)
 
 
 def pdf(file="a.pdf", vendor="Acme B.V.", number="INV-1", d="2025-03-01", total="121.00", subtotal="100.00",
@@ -153,7 +153,8 @@ def _run(base, period):
     if not (base / "sample.xlsx").exists():
         pytest.skip(f"{base} missing")
     return run_vouch(base / "sample.xlsx", base / "invoices", LabelExtractor(base / "labels"),
-                     VouchPolicy(period_start=period[0], period_end=period[1], currency=dataset_currency(base)))
+                     VouchPolicy(period_start=period[0], period_end=period[1], currency=dataset_currency(base),
+                                 line_items=True))
 
 
 def test_external_pack_matches_its_expected_results():

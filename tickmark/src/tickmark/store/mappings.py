@@ -23,6 +23,7 @@ def insert_mapping(conn: Connection, ctx: TenantContext, mapping: ColumnMapping,
         column_mappings.c.definition_version == mapping.version,
         column_mappings.c.headers_sha256 == mapping.headers_sha256,
         column_mappings.c.columns == mapping.columns,
+        column_mappings.c.meanings == {n: m.model_dump() for n, m in mapping.meanings.items()},
         column_mappings.c.source == source,
         column_mappings.c.confirmed_by.is_not_distinct_from(mapping.confirmed_by),
     ).order_by(column_mappings.c.created_at.desc()).limit(1)).scalar_one_or_none()
@@ -32,6 +33,7 @@ def insert_mapping(conn: Connection, ctx: TenantContext, mapping: ColumnMapping,
         tenant_id=ctx.tenant_id, engagement_id=ctx.engagement_id, definition=mapping.definition,
         definition_version=mapping.version, headers=[{"col": h.col, "header": h.header} for h in headers],
         headers_sha256=mapping.headers_sha256, columns=mapping.columns, source=source, notes=mapping.notes,
+        meanings={n: m.model_dump() for n, m in mapping.meanings.items()},
         proposal=mapping.proposal, confirmed_by=mapping.confirmed_by,
     ).returning(column_mappings.c.id)).scalar_one()
 
@@ -43,7 +45,7 @@ def save_mapping(ctx: TenantContext, mapping: ColumnMapping, headers: list[Cell]
 
 def _to_mapping(row) -> ColumnMapping:
     return ColumnMapping(definition=row.definition, version=row.definition_version, columns=row.columns,
-                         source=row.source, confirmed_by=row.confirmed_by, headers_sha256=row.headers_sha256,
+                         meanings=row.meanings or {}, source=row.source, confirmed_by=row.confirmed_by, headers_sha256=row.headers_sha256,
                          notes=row.notes, proposal=row.proposal)
 
 

@@ -15,7 +15,6 @@ from pathlib import Path
 
 from openpyxl.styles import Alignment, PatternFill
 
-from tickmark.extract import DocIntExtractor, LabelExtractor
 from tickmark.fields.types import parse_currency
 from tickmark.models import Verdict
 from tickmark.pipeline import run_vouch
@@ -28,6 +27,7 @@ from tools.identify_sample import (
     style,
 )
 from tools.mapping_args import add_mapping_arg, choose_mapping
+from tools.reader_args import add_reader_args, make_reader, print_routes
 from tools.tenant_args import add_tenant_args, tenant_context
 
 RESULT_MARK = {"agrees": "✓", "differs": "✗", "unverifiable": "?", "pass": "✓", "fail": "✗", "warn": "!",
@@ -106,6 +106,10 @@ def main() -> None:
     ap.add_argument("--save", action="store_true", help="store the run (and verdicts) in the audit database")
     add_tenant_args(ap)
     add_mapping_arg(ap)
+    add_reader_args(ap)
+    ap.add_argument("--line-items", action=argparse.BooleanOptionalAction, default=None,
+                    help="check that item lines add up (Azure reads the table); default with --save: the "
+                         "engagement's setting, else off")
     args = ap.parse_args()
     ctx = tenant_context(ap, args) if args.save else None
     mapping = choose_mapping(args.sample, args.mapping, ctx)
@@ -131,14 +135,20 @@ def main() -> None:
         currency = parse_currency(currency) if currency else None
     except ValueError as e:
         ap.error(str(e))
-    policy = VouchPolicy(period_start=period[0], period_end=period[1], currency=currency)
+    line_items = args.line_items
+    if line_items is None and ctx:
+        from tickmark.store import engagement_line_items
+
+        line_items = engagement_line_items(ctx)
+    policy = VouchPolicy(period_start=period[0], period_end=period[1], currency=currency, line_items=bool(line_items))
 
     started = datetime.now(UTC)
-    extractor = LabelExtractor(args.labels) if args.labels else DocIntExtractor()
+    extractor = make_reader(args.labels, args.azure)
     run = run_vouch(args.sample, args.invoices, extractor, policy, mapping)
     if run.loaded.mapping.source != "aliases":
         print(f"columns mapped by a {run.loaded.mapping.source} mapping confirmed by {run.loaded.mapping.confirmed_by}\n")
     print_verdicts(run.verdicts, args.trace)
+    print_routes(run)
     if args.out:
         wb = build_workbook(run.results, run.extracted, args.invoices)
         add_verdict_sheets(wb, run.verdicts, args.invoices)

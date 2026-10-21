@@ -3,6 +3,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from tickmark.definitions import INVOICE_VOUCHING, Definition
+from tickmark.extract.text import found_in_text
 from tickmark.match.identify import CONFIDENCE_MIN, normalize_number
 from tickmark.models import CleanRow, ExtractedInvoice, FieldAgreement
 from tickmark.sample import normalize_vendor
@@ -12,7 +13,7 @@ def read(inv: ExtractedInvoice, name: str) -> tuple[str | None, str]:
     """A value usable as evidence, or (None, why not)."""
     f = inv.get(name)
     if f is None or not f.value.strip():
-        return None, "not read from the PDF"
+        return None, f"not read from the PDF ({inv.unread[name]})" if name in inv.unread else "not read from the PDF"
     if f.confidence is None or f.confidence < CONFIDENCE_MIN:
         return None, f"read with low confidence ({f.confidence})"
     return f.value.strip(), ""
@@ -65,7 +66,10 @@ def compare(cr: CleanRow, inv: ExtractedInvoice, amount_tol: Decimal = Decimal("
             pv, why = read_date(inv, ev)
         else:
             pv, why = read(inv, ev)
-        if pv is None:
+        if pv is None and (snip := found_in_text(inv, spec.type, spec.role, rv)):
+            out.append(FieldAgreement(field=label, row_value=shown, pdf_value=snip.text, result="agrees",
+                                      detail=f"printed without a label on page {snip.page}"))
+        elif pv is None:
             out.append(FieldAgreement(field=label, row_value=shown, pdf_value=_shown(inv, ev),
                                       result="unverifiable", detail=why))
         elif spec.type == "money":
@@ -79,10 +83,10 @@ def compare(cr: CleanRow, inv: ExtractedInvoice, amount_tol: Decimal = Decimal("
                                       result="agrees" if days == 0 else "differs",
                                       delta="" if days == 0 else f"{days:+d} days (row − PDF)"))
         elif spec.type == "name":
-            key = normalize_vendor(pv)
-            same = key == cr.vendor_key
+            key, row_key = normalize_vendor(pv), normalize_vendor(rv)
+            same = key == row_key
             out.append(FieldAgreement(field=label, row_value=shown, pdf_value=pv, result="agrees" if same else "differs",
-                                      detail=f"key {key!r}" if same else f"keys {cr.vendor_key!r} / {key!r}"))
+                                      detail=f"key {key!r}" if same else f"keys {row_key!r} / {key!r}"))
         elif spec.type == "currency":
             same = pv.upper() == rv
             out.append(FieldAgreement(field=label, row_value=shown + source, pdf_value=pv,

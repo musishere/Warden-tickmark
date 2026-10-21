@@ -39,9 +39,11 @@ def test_european_amount(tmp_path):
     assert load_sample(p).rows[0].amount == Decimal("1234.50")
 
 
-def test_missing_required_column(tmp_path):
-    with pytest.raises(SampleFormatError, match="amount"):
-        load_sample(make(tmp_path, [["Vendor", "Date"], ["A", "2025-01-01"]]))
+def test_a_sheet_must_be_able_to_identify_an_invoice(tmp_path):
+    with pytest.raises(SampleFormatError, match="cannot identify an invoice"):
+        load_sample(make(tmp_path, [["Vendor", "Notes"], ["A", "x"]]))
+    assert load_sample(make(tmp_path, [["Vendor", "Date"], ["A", "2025-01-01"]])).rows[0].amount is None
+    assert load_sample(make(tmp_path, [["Invoice No", "Amount"], ["X-1", 10]])).rows[0].reference == "X-1"
 
 
 def test_bad_rows_reported_and_others_load(tmp_path):

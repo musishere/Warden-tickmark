@@ -5,6 +5,7 @@
         [--currency EUR]
     python -m tools.tenants set-period <engagement id> 2026-01-01:2026-12-31
     python -m tools.tenants set-currency <engagement id> EUR
+    python -m tools.tenants set-line-items <engagement id> on|off   # item lines: Azure reads each linked invoice
     python -m tools.tenants list
 
 Warden is the source of truth; pass its ids with --id so both systems agree.
@@ -17,6 +18,7 @@ from tickmark.store.provision import (
     add_tenant,
     list_tenants,
     set_currency,
+    set_line_items,
     set_period,
 )
 from tickmark.vouch import parse_period
@@ -41,6 +43,9 @@ def main() -> None:
     sc = sub.add_parser("set-currency")
     sc.add_argument("engagement_id")
     sc.add_argument("currency", help="three-letter code, e.g. EUR")
+    sl = sub.add_parser("set-line-items")
+    sl.add_argument("engagement_id")
+    sl.add_argument("on", choices=("on", "off"))
     sub.add_parser("list")
     args = ap.parse_args()
 
@@ -55,6 +60,9 @@ def main() -> None:
     elif args.cmd == "set-currency":
         set_currency(args.engagement_id, args.currency)
         print(f"engagement {args.engagement_id}: currency {args.currency.upper()}")
+    elif args.cmd == "set-line-items":
+        set_line_items(args.engagement_id, args.on == "on")
+        print(f"engagement {args.engagement_id}: item-lines check {args.on}")
     else:
         rows = list_tenants()
         if not rows:
@@ -65,7 +73,8 @@ def main() -> None:
                 if r["engagement_id"]:
                     period = f"  period {r['period_start']} … {r['period_end']}" if r["period_start"] else "  (no period)"
                     currency = f"  currency {r['currency']}" if r["currency"] else "  (no currency)"
-                    print(f"    {r['client_name']:<20} engagement {r['engagement_id']}{period}{currency}")
+                    lines = "  item lines on" if r["line_items"] else ""
+                    print(f"    {r['client_name']:<20} engagement {r['engagement_id']}{period}{currency}{lines}")
 
 
 if __name__ == "__main__":

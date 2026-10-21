@@ -29,8 +29,8 @@ def duplicate_map(invoices: list[ExtractedInvoice]) -> dict[str, list[tuple[str,
     for inv in invoices:
         number, _ = read(inv, "invoice_number")
         vendor, _ = read(inv, "vendor")
-        if number and vendor:
-            keyed.append((inv.file, normalize_vendor(vendor), normalize_number(number), number))
+        if number:  # a number used once is no duplicate, whoever the vendor is
+            keyed.append((inv.file, normalize_vendor(vendor) if vendor else "", normalize_number(number), number))
     return duplicates(keyed)
 
 
@@ -118,11 +118,13 @@ def duplicate(inv: ExtractedInvoice, dups: dict[str, list[tuple[str, str]]]) -> 
     found = dups.get(inv.file, [])
     if not found:
         return CheckResult(name="duplicate", status="pass", detail=f"number {number} used once", snips=snips)
-    status = "fail" if any(s == "fail" for s, _ in found) else "warn"
+    status = next((st for s, st in (("fail", "fail"), ("unclear", "not_checkable")) if any(x == s for x, _ in found)),
+                  "warn")
     return CheckResult(name="duplicate", status=status, detail="; ".join(d for _, d in found), snips=snips)
 
 
 def check_invoice(inv: ExtractedInvoice, policy: VouchPolicy,
                   dups: dict[str, list[tuple[str, str]]]) -> list[CheckResult]:
-    return [totals_reconcile(inv, policy.amount_tol), lines_sum(inv, policy.amount_tol), vat_rate(inv, policy),
-            in_period(inv, policy), duplicate(inv, dups)]
+    lines = [lines_sum(inv, policy.amount_tol)] if policy.line_items else []  # the engagement's choice
+    return [totals_reconcile(inv, policy.amount_tol), *lines, vat_rate(inv, policy), in_period(inv, policy),
+            duplicate(inv, dups)]

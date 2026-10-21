@@ -45,9 +45,12 @@ def clean_sample(rows: list[SampleRow], period: tuple[date, date] | None = None,
         notes.append(CleaningNote(row_id=cr.row.row_id, rule=rule, detail=detail))
 
     for row in rows:
-        cr = CleanRow(row=row, vendor_key=normalize_vendor(row.get(party.name)))
+        name = row.get(party.name)
+        cr = CleanRow(row=row, vendor_key=normalize_vendor(name) if name else "")
         key = (cr.vendor_key, *(row.get(s.name) for s in corroborating))
-        if key in seen:
+        if not name or all(v is None for v in key[1:]):
+            pass  # without the party and a corroborating value, two rows cannot be called the same
+        elif key in seen:
             flag(cr, f"duplicate_of:{seen[key]}", f"same {what} as row {seen[key]}")
         else:
             seen[key] = row.row_id

@@ -62,17 +62,30 @@ class ExtractedLineItem(BaseModel):
     snip: Snip | None = None
 
 
+class TextLine(BaseModel):
+    """A run of words on one line of a page, with where it is (points, origin top-left)."""
+
+    page: int
+    text: str
+    bbox: BBox
+
+
 class ExtractedInvoice(BaseModel):
     """What an extractor read from one PDF. Field names: vendor, invoice_number, invoice_date,
-    total, subtotal, tax, currency. A field the extractor could not read is absent."""
+    total, subtotal, tax, currency, and any other meaning's evidence field. A field the extractor
+    could not read is absent; `unread` says why when it knows (e.g. two different totals)."""
 
     file: str
     fields: dict[str, ExtractedField] = Field(default_factory=dict)
     line_items: list[ExtractedLineItem] = Field(default_factory=list)
-    extractor: str = ""  # azure-docint | labels
+    extractor: str = ""  # local | azure-docint | labels
     model_id: str = ""
     api_version: str | None = None
     raw: dict | None = Field(default=None, exclude=True)  # what the extractor returned, for the audit store
+    needs_ocr: list[str] = Field(default_factory=list)  # why the file cannot be read from its own text
+    unread: dict[str, str] = Field(default_factory=dict)  # field -> why it was not read
+    lines: list[TextLine] = Field(default_factory=list, exclude=True)  # the text, to find a value without a label
+    letterhead: int = Field(default=0, exclude=True)  # lines[:letterhead] are the issuer's letterhead
 
     def get(self, name: str) -> ExtractedField | None:
         return self.fields.get(name)
@@ -183,6 +196,7 @@ class SampleLoadResult(BaseModel):
     sheet: str | None = None  # the sheet's title
     headers: list[Cell] = Field(default_factory=list)  # the header row, one Cell per column
     mapping: Any = None  # the ColumnMapping that turned raw cells into fields
+    definition: Any = None  # the Definition the rows were read with (catalogue + the layout's own meanings)
 
 
 class CleaningNote(BaseModel):

@@ -37,13 +37,17 @@ def is_duplicate(invoice_number: str, seen: set[str]) -> bool:
 def duplicates(invoices: list[tuple[str, str, str, str]]) -> dict[str, list[tuple[str, str]]]:
     """invoices: (file, vendor_key, normalised number, number as printed). For each file that shares its number with
     another file: ("fail", ...) if the same vendor (a possible double payment), ("warn", ...) if a
-    different vendor (unusual, but numbers are only unique per vendor)."""
+    different vendor (unusual, but numbers are only unique per vendor), ("unclear", ...) if a vendor
+    was not read ("")."""
     found: dict[str, list[tuple[str, str]]] = {}
     for file, vendor, number, printed in invoices:
         for other, other_vendor, other_number, _ in invoices:
             if other == file or other_number != number:
                 continue
-            if other_vendor == vendor:
+            if not vendor or not other_vendor:
+                found.setdefault(file, []).append(("unclear", (f"number {printed} also used by {other}; "
+                                                               "vendor not read, so same or other supplier is unknown")))
+            elif other_vendor == vendor:
                 found.setdefault(file, []).append(("fail", f"same vendor and number {printed} as {other}"))
             else:
                 found.setdefault(file, []).append(("warn", f"number {printed} also used by {other} ({other_vendor})"))

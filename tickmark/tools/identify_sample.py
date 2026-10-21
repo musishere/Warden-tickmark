@@ -26,11 +26,12 @@ from pathlib import Path
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
-from tickmark.extract import DocIntExtractor, LabelExtractor
+from tickmark.config import settings
 from tickmark.match.identify import pdf_fields
 from tickmark.models import ExtractedInvoice, Identification
 from tickmark.pipeline import IdentificationRun, run_identification
 from tools.mapping_args import add_mapping_arg, choose_mapping, mapping_rows
+from tools.reader_args import add_reader_args, make_reader, print_routes
 from tools.tenant_args import add_tenant_args, tenant_context
 
 MARK = {"linked": "🔗", "needs_review": "👀", "no_evidence": "❓"}
@@ -40,13 +41,14 @@ FILL = {"linked": "E2F0D9", "needs_review": "FFF2CC", "no_evidence": "F2F2F2",
         "equal": "E2F0D9", "similar": "FFF2CC", "differs": "FCE4D6", "untrusted": "FFF2CC"}
 
 
-def run_full(sample: Path, invoices: Path, labels: Path | None, mapping=None) -> IdentificationRun:
-    return run_identification(sample, invoices, LabelExtractor(labels) if labels else DocIntExtractor(), mapping)
+def run_full(sample: Path, invoices: Path, labels: Path | None, mapping=None, azure: str = settings.azure
+             ) -> IdentificationRun:
+    return run_identification(sample, invoices, make_reader(labels, azure), mapping)
 
 
-def run(sample: Path, invoices: Path, labels: Path | None
+def run(sample: Path, invoices: Path, labels: Path | None, azure: str = settings.azure
         ) -> tuple[list[Identification], list[ExtractedInvoice]]:
-    r = run_full(sample, invoices, labels)
+    r = run_full(sample, invoices, labels, azure=azure)
     return r.results, r.extracted
 
 
@@ -209,23 +211,25 @@ def main() -> None:
     ap.add_argument("--save", action="store_true", help="store the run in the audit database")
     add_tenant_args(ap)
     add_mapping_arg(ap)
+    add_reader_args(ap)
     args = ap.parse_args()
     ctx = tenant_context(ap, args) if args.save else None
     mapping = choose_mapping(args.sample, args.mapping, ctx)
     started = datetime.now(UTC)
     try:
-        r = run_full(args.sample, args.invoices, args.labels, mapping)
+        r = run_full(args.sample, args.invoices, args.labels, mapping, args.azure)
     except Exception as e:
         if args.save:
             from tickmark.store import save_failed_run
 
             run_id = save_failed_run(ctx, sample_path=args.sample, started_at=started,
                                      error=f"{type(e).__name__}: {e}",
-                                     extractor="labels" if args.labels else "azure-docint")
+                                     extractor="labels" if args.labels else f"router:{args.azure}")
             print(f"run failed; recorded as {run_id}")
         raise
 
     print_results(r.results, r.extracted, args.trace)
+    print_routes(r)
     if args.out:
         wb = build_workbook(r.results, r.extracted, args.invoices)
         add_mapping_sheet(wb, r.loaded)

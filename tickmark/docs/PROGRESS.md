@@ -301,6 +301,40 @@ In code, every store call takes a `TenantContext(tenant_id, engagement_id, user)
 tests (`tests/test_tenancy.py`) include `tenant_a_cannot_read_tenant_b`, the ethical wall,
 fail-closed, forged ids, cross-engagement links, and everything the app role must not be able to do.
 
+### 10b. Dynamic meanings and local-first PDF reading
+**No column is required.** `definitions/__init__.py` is a catalogue of meanings a column can have
+(invoice number, vendor, customer, amount, net, VAT, date, due date, PO, currency, row id), each with
+a type, a role (key / party / corroborating / attribute / label), header aliases and the labels printed
+next to it on an invoice. A client layout may add its own meanings (`ColumnMapping.meanings`, stored
+in `column_mappings.meanings`, migration 0006); an LLM may propose them, code validates them, a person
+confirms. A run needs only enough to identify an invoice (`fields/mapping.cannot_run`): the invoice
+number plus one more linking column, or the vendor plus the amount or date. A meaning two columns
+could hold blocks the run until it is settled. Everything mapped is compared; how each type is
+compared and how a verdict is decided stay fixed in code.
+
+**PDFs are read from their own text first** (`extract/local.py`, pdfplumber):
+- File check (settings `TICKMARK_PDF_*`): a page with little text but an image (scan/photo), text over
+  a full-page image (a scanner's OCR), unreadable `(cid:)` characters, rotated text → `needs_ocr`.
+- Values next to labels: per line the longest label of any meaning wins ("Total excl. VAT" is net);
+  the value is the rest of the block, the next block, or the line below; one distinct value → read,
+  more → `unread` with both, none → absent. Amounts follow the document's decimal mark.
+- Without a label (`extract/text.found_in_text`): an invoice number as an exact word; the vendor only
+  in the letterhead (above the first "Bill to" or amount). Not found never means "differs".
+
+**Azure only where needed** (`extract/router.py`, `TICKMARK_AZURE=auto|off|always`): a PDF that
+needs OCR; after matching and vouching, a linked PDF where a value the row needs was not read, a
+needs-review candidate missing a linking value, or the PDFs sharing an invoice number whose vendor
+is unknown; then the run is matched and vouched again, once. Local and Azure readings are merged; a
+field read differently by both is not trusted. Item lines (only Azure reads the table) are checked
+only when the engagement turns it on. Each run stores how every PDF was read and why
+(`run_documents.read_by`, `read_reason`).
+
+Measured on the test sets (`eval_vouch --azure auto|off --no-line-items`, Azure faked from labels):
+generated 20/20 PDFs read locally with item lines off, verdicts identical to the labels; with auto,
+2 PDFs go to Azure (a duplicated invoice number needs both vendors). Hard set: 12 of 14 locally;
+one look-alike-vendor row is ❓ instead of 👀 locally (a similar name needs a vendor that was read).
+No false ✅ in any mode. Real scans and layouts still need `tools.compare_readers` with the Azure key.
+
 ### 11. Project layout
 ```
 src/tickmark/   app: api/, fields/ (sheet, types, mapping, profile, llm_mapping), definitions/, sample/, extract/,
@@ -308,7 +342,8 @@ src/tickmark/   app: api/, fields/ (sheet, types, mapping, profile, llm_mapping)
 tools/          datagen/, clean_sample, compare_sample, verify_clean, identify_sample, eval_identify,
                 vouch_sample, eval_vouch, map_columns, show_run, review, verify_run, tenants (register firms + engagements)
 migrations/     Alembic: 0001 audit tables + append-only triggers, 0002 multi-tenant (RLS, roles), 0003 verdicts,
-                0004 flexible input (additive: no stored row rewritten, no trigger disabled)
+                0004 flexible input (additive: no stored row rewritten, no trigger disabled), 0005 engagement
+                currency, 0006 dynamic meanings + how each PDF was read
 docker/initdb/  creates the tickmark_app login role on a fresh dev database
 tests/          122 tests (35 need Postgres and skip cleanly without it)
 data/           external/ (given), generated/, output/, cache/, store/   (gitignored)
@@ -371,11 +406,13 @@ Two separate questions:
 
 | Item | Status |
 |---|---|
-| Live Azure run | Needs credentials. Then measure reading accuracy and replace the hand-written test fixture `tests/fixtures/docint_inv_2026_1222.json` with a real cached result. |
+| Live Azure run | Needs credentials. Then run `tools.compare_readers` on real invoices (local must never contradict Azure), tune `TICKMARK_PDF_*` and the labels, and replace the hand-written fixture `tests/fixtures/docint_inv_2026_1222.json` with a real cached result. |
+| Several invoices in one PDF | Detected as ambiguous (two numbers/totals → Azure or 👀), not split. |
+| Look-alike vendors read locally | A vendor printed without a label is only matched exactly; "similar name → review" needs a read vendor (Azure). |
 | Materiality | A per-engagement "clearly trivial" threshold; today any difference over 0.01 is ⚠️. |
 | VAT rates | Per-country rate tables; today 0 / 9 / 21 % for every engagement. |
 | Duplicates across runs | Duplicates are checked within one run, not yet against the engagement's earlier runs. |
-| Live Claude mapping | Built and tested offline; no Anthropic credentials yet. `pytest -m llm` runs one real call on the unfamiliar sheet. |
+| Live LLM mapping | Through OpenRouter; `pytest -m llm` ran one real call (sonnet) on the unfamiliar sheet and passed. |
 | LLM policy per firm | The Claude settings are global; they should become a per-firm Warden policy. |
 | New audit types | The definition format supports them; only `invoice_vouching` ships. A second type (e.g. expense receipts) proves it end to end. |
 | Reviewing verdicts | Reviews are recorded on the identification; a review step for verdicts is next. |

@@ -49,6 +49,11 @@ def set_period(engagement_id: UUID, period: tuple[date, date], db: Engine | None
     _set(engagement_id, db, period_start=period[0], period_end=period[1])
 
 
+def set_line_items(engagement_id: UUID, on: bool, db: Engine | None = None) -> None:
+    """Check that item lines add up: Azure reads every linked invoice's table when on."""
+    _set(engagement_id, db, line_items=on)
+
+
 def set_currency(engagement_id: UUID, currency: str, db: Engine | None = None) -> None:
     """The currency of the client's amounts, used when a sample row does not state one."""
     _set(engagement_id, db, currency=parse_currency(currency))
@@ -58,7 +63,8 @@ def list_tenants(db: Engine | None = None) -> list[dict]:
     with (db or admin_engine()).connect() as conn:
         rows = conn.execute(select(tenants.c.id, tenants.c.name, tenants.c.entra_tenant_id,
                                    engagements.c.id.label("engagement_id"), engagements.c.client_name,
-                                   engagements.c.period_start, engagements.c.period_end, engagements.c.currency)
+                                   engagements.c.period_start, engagements.c.period_end, engagements.c.currency,
+                                   engagements.c.line_items)
                             .outerjoin(engagements, engagements.c.tenant_id == tenants.c.id)
                             .order_by(tenants.c.name, engagements.c.client_name)).mappings()
         return [dict(r) for r in rows]

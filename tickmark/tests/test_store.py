@@ -190,3 +190,41 @@ def test_unconfirmed_claude_mapping_cannot_be_stored(tenancy):
     m = ColumnMapping(definition="invoice_vouching", version=INVOICE_VOUCHING.version, columns={"amount": "D"}, source="claude")
     with pytest.raises(IntegrityError, match="column_mappings_confirmed"):
         save_mapping(tenancy.coke, m, [], db=tenancy.app)
+
+
+def test_a_layouts_own_meaning_and_how_each_pdf_was_read_are_stored_and_verify(tenancy, tmp_path):
+    """Read locally (no Azure), with a meaning only this layout has; stored and verifiable."""
+    from openpyxl import Workbook
+
+    from tickmark.extract.router import Router
+    from tickmark.fields.mapping import ColumnMapping, Meaning, headers_sha256
+    from tickmark.fields.sheet import read_sheet
+    from tickmark.sample import load_sample
+    from tickmark.store.mappings import current_mapping, save_mapping
+
+    t = tenancy
+    if not (GEN / "sample.xlsx").exists():
+        pytest.skip("generated data missing")
+    wb = Workbook()
+    wb.active.append(["Row", "Vendor", "Amount", "Date", "Kostenplaats"])
+    for r in load_sample(GEN / "sample.xlsx").rows[:4]:
+        wb.active.append([int(r.row_id), r.vendor, float(r.amount), r.invoice_date, "KP-1"])
+    wb.save(tmp_path / "s.xlsx")
+    sheet = read_sheet(tmp_path / "s.xlsx")
+    m = ColumnMapping(definition="invoice_vouching", version=INVOICE_VOUCHING.version, source="person",
+                      columns={"row_id": "A", "vendor": "B", "amount": "C", "invoice_date": "D", "cost_centre": "E"},
+                      meanings={"cost_centre": Meaning(type="text", labels=["Cost centre"])},
+                      confirmed_by="ali", headers_sha256=headers_sha256(sheet))
+    save_mapping(t.pepsi, m, sheet.headers, db=t.app)
+    found = current_mapping(t.pepsi, "invoice_vouching", INVOICE_VOUCHING.version, headers_sha256(sheet), db=t.app)
+    assert found.meanings == m.meanings
+
+    start, end = PERIOD[GEN]
+    run = run_vouch(tmp_path / "s.xlsx", GEN / "invoices", Router("off"),
+                    VouchPolicy(period_start=start, period_end=end, currency="EUR"), found)
+    run_id = _save(t, run, t.pepsi)
+    stored = get_run(t.pepsi, run_id, t.app)
+    assert {f["read_by"] for f in stored.files} == {"local"}
+    assert "cost_centre" in {f["name"] for f in stored.run["definition"]["fields"]}
+    assert stored.verdicts == run.verdicts
+    assert verify_run(t.pepsi, run_id, t.app) == []

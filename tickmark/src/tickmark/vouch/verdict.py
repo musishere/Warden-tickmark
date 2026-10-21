@@ -8,6 +8,7 @@
     else                                    -> ✅ matched
 A check that warns (e.g. the number is also used by another vendor) is shown but does not block ✅.
 """
+from tickmark.definitions import INVOICE_VOUCHING, Definition
 from tickmark.models import CleanRow, ExtractedInvoice, Identification, Verdict
 from tickmark.vouch.compare import compare
 from tickmark.vouch.invoice_checks import check_invoice, duplicate_map
@@ -17,15 +18,15 @@ MARK = {"matched": "✅", "difference": "⚠️", "needs_review": "👀", "no_ev
 
 
 def vouch(identifications: list[Identification], rows: list[CleanRow], invoices: list[ExtractedInvoice],
-          policy: VouchPolicy) -> list[Verdict]:
+          policy: VouchPolicy, definition: Definition = INVOICE_VOUCHING) -> list[Verdict]:
     by_row = {cr.row.excel_row: cr for cr in rows}
     by_file = {inv.file: inv for inv in invoices}
     dups = duplicate_map(invoices)
-    return [_verdict(ident, by_row[ident.excel_row], by_file, policy, dups) for ident in identifications]
+    return [_verdict(ident, by_row[ident.excel_row], by_file, policy, dups, definition) for ident in identifications]
 
 
 def _verdict(ident: Identification, cr: CleanRow, by_file: dict[str, ExtractedInvoice], policy: VouchPolicy,
-             dups: dict) -> Verdict:
+             dups: dict, definition: Definition) -> Verdict:
     base = {"row_id": ident.row_id, "excel_row": ident.excel_row}
     if ident.status == "no_evidence":
         return Verdict(**base, verdict="no_evidence", reasons=[ident.reason],
@@ -35,7 +36,7 @@ def _verdict(ident: Identification, cr: CleanRow, by_file: dict[str, ExtractedIn
                        steps=["Identification needs review, so the claim is not compared yet → 👀 needs_review"])
 
     inv = by_file[ident.invoice_file]
-    agreements = compare(cr, inv, policy.amount_tol, defaults={"currency": policy.currency})
+    agreements = compare(cr, inv, policy.amount_tol, definition, defaults={"currency": policy.currency})
     checks = check_invoice(inv, policy, dups)
     differs = [f"{a.field} differs: row {a.row_value}, PDF {a.pdf_value}" + (f", {a.delta}" if a.delta else "")
                for a in agreements if a.result == "differs"]

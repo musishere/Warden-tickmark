@@ -23,6 +23,7 @@ from tickmark.fields.llm_mapping import (
 )
 from tickmark.fields.mapping import (
     ColumnMapping,
+    Meaning,
     alias_mapping,
     apply_mapping,
     headers_sha256,
@@ -66,8 +67,10 @@ def make(tmp_path, rows) -> Path:
 
 def test_unknown_headers_are_not_guessed(unfamiliar):
     sheet = read_sheet(unfamiliar)
-    mapping, missing = resolve(sheet, INVOICE_VOUCHING)
-    assert mapping is None and missing == ["vendor", "amount", "invoice_date"]
+    mapping, problems = resolve(sheet, INVOICE_VOUCHING)
+    assert mapping is None and problems == [
+        ("cannot identify an invoice: map the reference plus the vendor or amount or invoice_date, or the vendor "
+         "plus the amount or invoice_date (mapped: nothing)")]
 
 
 def test_unfamiliar_sheet_mapped_gives_identical_verdicts(unfamiliar):
@@ -128,11 +131,14 @@ def test_profile_describes_shapes():
 
 def test_proposal_schema_allows_only_this_sheets_columns_and_our_fields(unfamiliar):
     model = _schema(read_sheet(unfamiliar), INVOICE_VOUCHING)
-    ok = {"fields": [{"field": "amount", "column": "D", "confidence": 0.9, "reason": "r"}]}
+    ok = {"fields": [{"field": "amount", "column": "D", "confidence": 0.9, "reason": "r"}], "new_meanings": []}
     assert model.model_validate(ok)
     for bad in ({"field": "amount", "column": "Z"}, {"field": "delete_everything", "column": "A"}):
         with pytest.raises(ValidationError):
-            model.model_validate({"fields": [bad | {"confidence": 1, "reason": "r"}]})
+            model.model_validate({"fields": [bad | {"confidence": 1, "reason": "r"}], "new_meanings": []})
+    new = {"column": "F", "name": "cost centre", "type": "text", "labels": ["CC"], "confidence": 1, "reason": "r"}
+    with pytest.raises(ValidationError):  # a new meaning still names a real column and one of our types
+        model.model_validate({"fields": [], "new_meanings": [new | {"type": "sql"}]})
 
 
 def test_an_injected_proposal_is_caught_by_validation(unfamiliar):
@@ -188,8 +194,8 @@ def test_two_columns_for_one_field_are_not_guessed(tmp_path):
     p = make(tmp_path, [["Row", "Vendor", "Amount", "Total", "Date"], [1, "Acme", 100, 121, "2025-01-01"]])
     m = alias_mapping(read_sheet(p), INVOICE_VOUCHING)
     assert "amount" not in m.columns and m.notes["amount"] == "ambiguous: could be C 'Amount' or D 'Total'"
-    with pytest.raises(SampleFormatError, match=r"amount \(ambiguous: could be C 'Amount' or D 'Total'\)"):
-        load_sample(p)
+    with pytest.raises(SampleFormatError, match=r"amount is ambiguous: could be C 'Amount' or D 'Total'"):
+        load_sample(p)  # vendor + date could identify the invoice, but the amount must not go unchecked
 
 
 @pytest.mark.parametrize("text", ["1.234", "12.345", "1,234"])
@@ -238,14 +244,14 @@ def llm(monkeypatch, handler):
     return LLMProposer(http=httpx.Client(transport=httpx.MockTransport(handler)), model="m", send_values=False)
 
 
-def answer(fields: list[dict]):
+def answer(fields: list[dict], new: list[dict] = ()):
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         assert request.url == "https://llm.test/api/v1/chat/completions"
         assert request.headers["authorization"] == "Bearer k"
         assert body["response_format"]["json_schema"]["strict"] is True
         return httpx.Response(200, json={"model": "m-1", "choices": [
-            {"finish_reason": "stop", "message": {"content": json.dumps({"fields": fields})}}]})
+            {"finish_reason": "stop", "message": {"content": json.dumps({"fields": fields, "new_meanings": new})}}]})
     return handler
 
 
@@ -283,6 +289,35 @@ def test_bracketed_words_that_change_the_meaning_are_not_mapped(tmp_path):
     p = make(tmp_path, [["Supplier", "Amount (excl. VAT)", "Date (posting)", "Invoice Date"],
                         ["A", 100, "2025-01-31", "2025-01-02"]])
     m = alias_mapping(read_sheet(p), INVOICE_VOUCHING)
-    assert m.columns == {"vendor": "A", "invoice_date": "D"}  # net amount and posting date are never guessed
-    with pytest.raises(SampleFormatError, match="missing required column.*amount"):
-        load_sample(p)
+    # the net amount is the net amount (not the total), and the posting date is never guessed
+    assert m.columns == {"vendor": "A", "net_amount": "B", "invoice_date": "D"}
+
+
+# --- the layout's own meanings ---------------------------------------------------------------------
+
+def test_a_layout_can_add_a_meaning_and_it_is_compared(tmp_path):
+    p = make(tmp_path, [["Invoice No", "Amount", "Contract"], ["INV-1", 121, "C-77"]])
+    sheet = read_sheet(p)
+    m = confirmed(sheet, {"reference": "A", "amount": "B", "contract_no": "C"}).model_copy(
+        update={"meanings": {"contract_no": Meaning(type="identifier", labels=["Contract no"])}})
+    assert validate(sheet, INVOICE_VOUCHING, m) == []
+    res = load_sample(p, mapping=m)
+    assert res.rows[0].get("contract_no") == "C-77" and res.definition.field("contract_no").role == "attribute"
+    bad = m.model_copy(update={"meanings": {"amount": Meaning(type="money", labels=["x"]),
+                                            "Bad Name": Meaning(type="text", labels=["x"]),
+                                            "contract_no": Meaning(type="sql", labels=[])}})
+    assert {p.split(":")[0] for p in validate(sheet, INVOICE_VOUCHING, bad)} >= {"amount", "Bad Name", "contract_no"}
+
+
+def test_llm_can_propose_a_new_meaning_and_code_keeps_only_sound_ones(monkeypatch, unfamiliar):
+    sheet = read_sheet(unfamiliar)
+    fields = [{"field": f, "column": c, "confidence": 1, "reason": "r"} for f, c in EXPECTED.items()]
+    new = [{"column": "F", "name": "Cost Centre", "type": "text", "labels": ["Cost centre"], "confidence": 0.7,
+            "reason": "KP- codes"},
+           {"column": "B", "name": "payee", "type": "name", "labels": ["Payee"], "confidence": 1, "reason": "taken"},
+           {"column": "G", "name": "note", "type": "text", "labels": [" "], "confidence": 1, "reason": "no label"}]
+    p = llm(monkeypatch, answer(fields, new)).propose(sheet, INVOICE_VOUCHING)
+    assert p.meanings == {"cost_centre": Meaning(type="text", labels=["Cost centre"], description="KP- codes")}
+    assert p.columns["cost_centre"] == "F"
+    m = to_mapping(sheet, INVOICE_VOUCHING, p)
+    assert m.meanings == p.meanings and validate(sheet, INVOICE_VOUCHING, m) == []

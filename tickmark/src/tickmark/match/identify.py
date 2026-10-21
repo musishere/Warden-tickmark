@@ -16,7 +16,6 @@ Rules, in order:
 Every decision is recorded as it is made (Identification.comparisons and .steps), so a person can
 check each link without re-running anything.
 """
-import re
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -24,6 +23,7 @@ from decimal import Decimal, InvalidOperation
 from rapidfuzz import fuzz
 
 from tickmark.definitions import INVOICE_VOUCHING, Definition, FieldSpec
+from tickmark.extract.text import found_in_text, normalize_number
 from tickmark.models import (
     Candidate,
     CleanRow,
@@ -43,10 +43,6 @@ AMOUNT_TOL = Decimal("0.01")
 THRESHOLDS = {"confidence_min": CONFIDENCE_MIN, "vendor_similar": VENDOR_SIMILAR, "amount_tol": str(AMOUNT_TOL)}
 
 
-def normalize_number(text: str) -> str:
-    """'inv-2026 / 1037' and 'INV20261037' compare equal."""
-    return re.sub(r"[\s\-/._#]", "", text).upper()
-
 
 @dataclass
 class _Pdf:
@@ -56,6 +52,7 @@ class _Pdf:
     key: dict[str, str] = field(default_factory=dict)  # evidence field -> matching key (names, numbers)
     snips: dict[str, Snip] = field(default_factory=dict)
     fields: dict[str, PdfField] = field(default_factory=dict)
+    inv: ExtractedInvoice | None = None  # for values printed without a label (found_in_text)
 
 
 @dataclass
@@ -78,7 +75,7 @@ def pdf_fields(inv: ExtractedInvoice, definition: Definition = INVOICE_VOUCHING)
 
 
 def _trusted(inv: ExtractedInvoice, definition: Definition = INVOICE_VOUCHING) -> _Pdf:
-    pdf = _Pdf(file=inv.file)
+    pdf = _Pdf(file=inv.file, inv=inv)
     for name, f in inv.fields.items():
         why = ""
         if f.confidence is None:
@@ -172,6 +169,14 @@ def _compare(cr: CleanRow, pdf: _Pdf, definition: Definition = INVOICE_VOUCHING)
         if rv is None:
             checks.append(FieldCheck(field=spec.label, row_value="", pdf_value=_shown(pdf, ev), result="not in row"))
             continue
+        if ev not in pdf.key and (snip := found_in_text(pdf.inv, spec.type, spec.role, rv)):
+            # printed without a label (an invoice number as a word, the vendor in the letterhead)
+            agree.append(spec.label)
+            pdf.snips.setdefault(ev, snip)
+            pdf.shown.setdefault(ev, snip.text)
+            checks.append(FieldCheck(field=spec.label, row_value=str(rv), pdf_value=snip.text, result="equal",
+                                     detail="printed without a label"))
+            continue
         if spec.role == "key":
             ref = normalize_number(rv)
             if ev in pdf.key and ref == pdf.key[ev]:
@@ -246,7 +251,9 @@ def _evidence(cr: CleanRow, c: _Cand, definition: Definition = INVOICE_VOUCHING)
         if spec.role == "key":
             out.append(f"{_noun(spec)} {shown} equal")
         elif spec.type == "name":
-            out.append(f"{spec.label} {shown!r} equal (key {c.pdf.key[spec.evidence_field]!r})")
+            how = f"key {c.pdf.key[spec.evidence_field]!r}" if spec.evidence_field in c.pdf.key \
+                else "printed without a label"
+            out.append(f"{spec.label} {shown!r} equal ({how})")
         else:
             out.append(f"{spec.label} {shown} equal")
     return out
