@@ -95,6 +95,7 @@ def view(ws: Workspace, problems: list[str] | None = None) -> dict:
     return {
         "id": ws.id, "sheet": sheet.title, "header_row": sheet.header_row, "rows": len(sheet.rows),
         "above_header": len(sheet.preamble), "engagement": str(ws.ctx.engagement_id) if ws.ctx else None,
+        "tenant": str(ws.ctx.tenant_id) if ws.ctx else None,
         "columns": [{"col": h.col, "header": h.header, "pattern": profiles[h.col].pattern,
                      "filled": profiles[h.col].filled} for h in sheet.headers],
         "catalogue": [{"name": f.name, "type": f.type, "role": f.role, "description": f.description}

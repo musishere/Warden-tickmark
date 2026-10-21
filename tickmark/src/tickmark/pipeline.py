@@ -4,9 +4,12 @@ Used by the tools and by the audit store, so a stored run is exactly what the to
 With a Router as the extractor, PDFs are read locally first; those it cannot settle are read by
 Azure (second pass), and the rows are matched and vouched again, once (tickmark.extract.router).
 """
+import contextvars
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from tickmark.config import settings
 from tickmark.extract import Extractor
 from tickmark.extract.router import Router
 from tickmark.fields.mapping import ColumnMapping
@@ -63,19 +66,30 @@ def _identify(sample: Path, invoice_dir: Path, extractor: Extractor, mapping: Co
     files = invoice_files(invoice_dir)
     if isinstance(extractor, Router):
         extractor.use(loaded.definition)
-    extracted = [extractor.extract(p) for p in files]
+    extracted = _parallel([lambda p=p: extractor.extract(p) for p in files])
     run = IdentificationRun(Path(sample), files, loaded, cleaned, extracted,
                             identify(cleaned.rows, extracted, loaded.definition))
     run.routes = extractor.routes if isinstance(extractor, Router) else {}
     return run
 
 
+def _parallel(tasks: list) -> list:
+    """Run reads side by side (Azure takes ~15 s per PDF), results in the same order. Each task keeps
+    the caller's context, so its log lines still reach the run's log on the page."""
+    if len(tasks) < 2 or settings.read_concurrency < 2:
+        return [t() for t in tasks]
+    with ThreadPoolExecutor(settings.read_concurrency) as pool:
+        futures = [pool.submit(contextvars.copy_context().run, t) for t in tasks]
+        return [f.result() for f in futures]
+
+
 def _second_pass(run: IdentificationRun, extractor: Extractor) -> None:
     """Azure reads the PDFs local reading could not settle; then match and vouch again, once."""
     if isinstance(extractor, Router) and (want := extractor.second_pass(run)):
         paths = {p.name: p for p in run.invoice_files}
-        run.extracted = [extractor.reread(paths[inv.file], inv, want[inv.file]) if inv.file in want else inv
-                         for inv in run.extracted]
+        run.extracted = _parallel([
+            (lambda inv=inv: extractor.reread(paths[inv.file], inv, want[inv.file])) if inv.file in want
+            else (lambda inv=inv: inv) for inv in run.extracted])
         run.results = identify(run.cleaned.rows, run.extracted, run.loaded.definition)
         if run.policy:
             run.verdicts = vouch(run.results, run.cleaned.rows, run.extracted, run.policy, run.loaded.definition)

@@ -46,7 +46,7 @@ def test_tough_case_with_azure_off_and_auto(tmp_path):
     assert marks(off) == "T-01✅ T-02✅ T-03⚠️ T-04❓ T-05👀 T-06👀 T-07⚠️ T-08⚠️ T-09👀 T-10⚠️ T-11✅ T-13❓"
     auto = run_vouch(tmp_path / "sample.xlsx", tmp_path / "invoices", Router("auto", FakeAzure(tmp_path / "labels")),
                      POLICY, m)
-    assert marks(auto) == "T-01✅ T-02✅ T-03⚠️ T-04✅ T-05✅ T-06⚠️ T-07⚠️ T-08⚠️ T-09⚠️ T-10⚠️ T-11✅ T-13❓"
+    assert marks(auto) == "T-01✅ T-02✅ T-03⚠️ T-04✅ T-05✅ T-06👀 T-07⚠️ T-08⚠️ T-09⚠️ T-10⚠️ T-11✅ T-13❓"
     assert sorted(f for f, (by, _) in auto.routes.items() if by == "azure") == ["t04.pdf", "t05.pdf", "t06.pdf", "t09.pdf",
                                                                                     "t10.pdf"]
     contract = next(a for a in auto.verdicts[0].agreements if a.field == "contract no")

@@ -20,7 +20,7 @@
       <label>Sample (.xlsx) <input type="file" name="sample" accept=".xlsx" required></label>
       <label>Invoices (.pdf) <input type="file" name="invoices" accept=".pdf" multiple></label>
       <fieldset>
-        <legend>Save to an audit trail (optional)</legend>
+        <legend>Audit trail: runs are saved under this firm and engagement (none chosen: "Local firm" / "Default engagement")</legend>
         <div class="row">
           <label>Firm <select id="tenant"><option value="">— none —</option></select></label>
           <label>Engagement <select id="engagement"><option value="">— none —</option></select></label>
@@ -35,6 +35,7 @@
             <input id="new-client" placeholder="Client name">
             <input id="new-period" placeholder="2025-01-01:2025-12-31" size="22">
             <input id="new-currency" placeholder="EUR" size="4">
+            <input id="new-vat" placeholder="VAT % e.g. 0,7,19" size="14">
             <label class="inline"><input type="checkbox" id="new-lines"> item lines</label>
             <button type="button" id="add-engagement">Add engagement</button>
           </div>
@@ -74,6 +75,7 @@
       <label>Period from <input type="date" id="p-start"></label>
       <label>to <input type="date" id="p-end"></label>
       <label>Currency <input id="currency" size="4" placeholder="EUR"></label>
+      <label>VAT rates % <input id="vat-rates" size="10" placeholder="0,9,21"></label>
       <label>Azure <select id="azure"><option>auto</option><option>off</option><option>always</option></select></label>
       <label class="inline"><input type="checkbox" id="line-items"> item lines (Azure reads each linked invoice)</label>
       <label class="inline"><input type="checkbox" id="save"> save to the audit trail</label>

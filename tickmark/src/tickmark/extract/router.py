@@ -15,13 +15,14 @@ from pathlib import Path
 
 from tickmark.config import settings
 from tickmark.definitions import INVOICE_VOUCHING, Definition
-from tickmark.extract.azure_docint import DocIntError, DocIntExtractor, ocr_words
+from tickmark.extract.azure_docint import FIELD_MAP, DocIntError, DocIntExtractor, ocr_words
 from tickmark.extract.local import LocalExtractor
-from tickmark.extract.text import found_in_text, normalize_number
+from tickmark.extract.text import corroborate, found_in_text, normalize_number
 from tickmark.log import get
 from tickmark.models import ExtractedInvoice
 
 log = get("router")
+AZURE_FIELDS = {name for name, _ in FIELD_MAP.values()} | {"currency"}  # what Azure's invoice model reads itself
 
 # what each invoice check needs read from the PDF (lines_sum: the item table, which only Azure reads)
 CHECK_NEEDS = {"totals_reconcile": ("subtotal", "tax", "total"), "vat_rate": ("subtotal", "tax"),
@@ -74,20 +75,25 @@ class Router:
             if local.needs_ocr:
                 local.needs_ocr = [*local.needs_ocr, "Azure not available"]
             return local
-        if inv.raw:  # the label finder on Azure's OCR words: meanings Azure has no field for, and the text
-            from_ocr = LocalExtractor(self.definition).from_words(ExtractedInvoice(file=inv.file), ocr_words(inv.raw))
-            inv.lines, inv.letterhead = from_ocr.lines, from_ocr.letterhead
-            for name, f in from_ocr.fields.items():
-                inv.fields.setdefault(name, f)
-        if not local.needs_ocr:
-            for name, f in local.fields.items():
-                if name not in inv.fields:
-                    inv.fields[name] = f
-                elif not _same(inv.fields[name].value, f.value):
-                    inv.unread[name] = f"read differently: Azure {inv.fields[name].value!r}, local {f.value!r}"
-                    log.warning("%s: %s %s - trusted by neither", inv.file, name, inv.unread[name])
-                    del inv.fields[name]
-            inv.lines, inv.letterhead = inv.lines or local.lines, inv.letterhead or local.letterhead
+        # Azure's own fields win. Label reading (on the PDF's text, or on Azure's OCR words for a scan)
+        # only fills meanings Azure has no field for: measured on real invoices, it misreads far more.
+        from_ocr = LocalExtractor(self.definition).from_words(ExtractedInvoice(file=inv.file), ocr_words(inv.raw)) \
+            if inv.raw else ExtractedInvoice(file=inv.file)
+        readers = [from_ocr] if local.needs_ocr else [local, from_ocr]
+        for other in readers:
+            for name, f in other.fields.items():
+                if name not in AZURE_FIELDS:
+                    inv.fields.setdefault(name, f)
+                elif name in inv.fields and other is local:
+                    if _same(inv.fields[name].value, f.value):  # two readers agree: that confirms it
+                        inv.fields[name] = inv.fields[name].model_copy(update={"corroborated": "local reading agrees"})
+                    else:
+                        log.info("%s: %s: using Azure's %r, not the local %r", inv.file, name,
+                                 inv.fields[name].value, f.value)
+        # the PDF's own text layer is independent of Azure; on a scan only Azure's OCR lines exist
+        inv.lines = local.lines if not local.needs_ocr and local.lines else from_ocr.lines
+        inv.letterhead = local.letterhead if inv.lines is local.lines else from_ocr.letterhead
+        corroborate(inv)
         self.routes[inv.file] = ("azure", why)
         return inv
 

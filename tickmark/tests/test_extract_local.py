@@ -202,21 +202,28 @@ def test_a_value_not_read_clearly_sends_only_that_pdf_to_azure(tmp_path):
     invoice(tmp_path / "inv/a.pdf")
     invoice(tmp_path / "inv/b.pdf", vendor="Globex Ltd", number="INV-2", extra=[(360, 500, "Total"), (460, 500, "99.00")])
     rows = [[1, "Acme", "INV-1", 121, "2025-03-01"], [2, "Globex", "INV-2", 121, "2025-03-01"]]
-    azure = FakeAzure(azure_answer(invoice_number="INV-2", total="121.00", subtotal="100.00", tax="21.00"))
+    azure = FakeAzure(azure_answer(invoice_number="INV-2", invoice_date="2025-03-01", total="121.00",
+                                   subtotal="100.00", tax="21.00", currency="EUR"))
     run = run_vouch(sample(tmp_path, rows), tmp_path / "inv", Router("auto", azure), Y2025)
     assert azure.calls == ["b.pdf"]  # b has two different totals; a was settled locally
     assert run.routes["b.pdf"] == ("azure", "not read clearly: total")
     assert [v.verdict for v in run.verdicts] == ["matched", "matched"]
 
 
-def test_local_and_azure_reading_differently_is_trusted_by_neither(tmp_path):
+def test_azure_wins_over_local_reading_and_agreement_confirms(tmp_path):
+    """Measured on real invoices, local label reading misreads far more than Azure: Azure's value is
+    used; where both read the same, that confirms a value Azure read with low confidence."""
     (tmp_path / "inv").mkdir()
     invoice(tmp_path / "inv/a.pdf")
-    router = Router("always", FakeAzure(azure_answer(invoice_number="INV-1", total="112.00")))
-    run = run_vouch(sample(tmp_path, [[1, "Acme", "INV-1", 121, "2025-03-01"]]), tmp_path / "inv", router, Y2025)
+    answer = lambda p: ExtractedInvoice(file=p.name, fields={
+        "invoice_number": ExtractedField(name="invoice_number", value="INV-1", confidence=0.45),
+        "total": ExtractedField(name="total", value="112.00", confidence=0.99)})
+    run = run_vouch(sample(tmp_path, [[1, "Acme", "INV-1", 121, "2025-03-01"]]), tmp_path / "inv",
+                    Router("always", FakeAzure(answer)), Y2025)
     inv = run.extracted[0]
-    assert "total" not in inv.fields and inv.unread["total"] == "read differently: Azure '112.00', local '121.00'"
-    assert run.verdicts[0].verdict != "matched"
+    assert inv.fields["total"].value == "112.00"  # Azure's, not the local 121.00
+    assert inv.fields["invoice_number"].corroborated == "local reading agrees"  # 0.45, but both read INV-1
+    assert run.verdicts[0].verdict == "difference" and "amount differs: row 121, PDF 112.00" in run.verdicts[0].reasons[0]
 
 
 def test_item_lines_are_checked_only_when_the_engagement_asks(tmp_path):
@@ -247,3 +254,20 @@ def test_without_azure_credentials_auto_keeps_the_local_reading_and_says_why(tmp
                     Router("auto", DocIntExtractor(cache_dir=tmp_path / "cache")), Y2025)
     assert run.routes["a.pdf"][0] == "local" and "not available" in run.routes["a.pdf"][1]
     assert run.verdicts[0].verdict == "no_evidence"
+
+
+def test_low_confidence_values_count_when_the_invoice_confirms_them():
+    from tickmark.extract.text import corroborate, untrusted
+    from tickmark.models import BBox, TextLine
+
+    f = lambda n, v: ExtractedField(name=n, value=v, confidence=0.43)
+    inv = ExtractedInvoice(file="x.pdf", fields={n: f(n, v) for n, v in (
+        ("subtotal", "177.49"), ("tax", "20.16"), ("total", "197.65"), ("invoice_number", "471102"),
+        ("invoice_date", "2018-06-05"), ("currency", "EUR"), ("vendor", "Lieferant GmbH"), ("due_date", "2018-07-04"))},
+        lines=[TextLine(page=1, text=t, bbox=BBox(x0=0, y0=0, x1=1, y1=1)) for t in (
+            "Lieferant GmbH", "Rechnung Nr. 471102 vom 05.06.2018", "Summe 197,65 EUR")])
+    assert untrusted(inv.fields["total"]) == "read with confidence 0.43 and nothing confirms it"
+    corroborate(inv)
+    for n in ("subtotal", "tax", "total", "invoice_number", "invoice_date", "currency", "vendor"):
+        assert untrusted(inv.fields[n]) == "", n
+    assert untrusted(inv.fields["due_date"])  # 04.07.2018 is not printed: nothing confirms it

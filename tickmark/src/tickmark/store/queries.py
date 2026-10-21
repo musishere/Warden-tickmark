@@ -148,6 +148,13 @@ def engagement_currency(ctx: TenantContext, db: Engine | None = None) -> str | N
                             .where(engagements.c.id == ctx.engagement_id)).scalar_one_or_none()
 
 
+def engagement_vat_rates(ctx: TenantContext, db: Engine | None = None) -> str | None:
+    """The VAT rates (in %) of ctx's engagement, e.g. '0,7,19', or None if it sets none."""
+    with scoped(ctx, db) as conn:
+        return conn.execute(select(engagements.c.vat_rates)
+                            .where(engagements.c.id == ctx.engagement_id)).scalar_one_or_none()
+
+
 def engagement_line_items(ctx: TenantContext, db: Engine | None = None) -> bool:
     """Whether ctx's engagement checks item lines (needs Azure for every linked invoice)."""
     with scoped(ctx, db) as conn:

@@ -97,6 +97,10 @@ def parse(xml: bytes) -> dict | None:
         "vat_rates": sorted({e.text.strip() for e in root.iter() if _local(e.tag) == "RateApplicablePercent"
                              and e.text}),
     }
+    if truth["type_code"] == "381":  # a credit note: the XML holds positive amounts, the PDF and ledgers negative
+        for k in ("net_total", "vat_amount", "total"):
+            if truth[k] and not truth[k].startswith("-"):
+                truth[k] = f"-{truth[k]}"
     return truth if all(truth[k] for k in ("invoice_number", "invoice_date", "vendor", "total")) else None
 
 
@@ -113,7 +117,7 @@ def build(corpus: Path, out: Path, seed: int = 7, unique: bool = True) -> dict:
     for pdf in sorted(corpus.rglob("*.pdf")):
         if "fail" in pdf.relative_to(corpus).parts or not (xml := embedded_xml(pdf)) or not (t := parse(xml)):
             continue
-        key = (t["vendor"], t["invoice_number"], t["total"])
+        key = (t["vendor"], t["invoice_number"])  # one invoice per supplier and number, as in real books
         if unique and key in seen:
             continue
         seen.add(key)

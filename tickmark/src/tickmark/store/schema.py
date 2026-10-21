@@ -82,6 +82,7 @@ engagements = Table(
     Column("period_end", Date),
     Column("currency", Text),  # three-letter code: the amounts' currency when a row does not say
     Column("line_items", Boolean, nullable=False, server_default=false()),  # check item lines (needs Azure)
+    Column("vat_rates", Text),  # allowed VAT rates in %, e.g. "0,7,19"; none: settings.vat_rates
     UniqueConstraint("tenant_id", "id", name="engagements_scoped_key"),
     CheckConstraint("period_end >= period_start", name="engagements_period_order"),
     CheckConstraint("currency ~ '^[A-Z]{3}$'", name="engagements_currency_code"),

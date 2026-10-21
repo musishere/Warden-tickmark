@@ -9,6 +9,10 @@ from tickmark.models import CleanedSample, CleaningNote, CleanRow, SampleRow
 LEGAL_SUFFIXES = {
     "bv", "nv", "gmbh", "ag", "kg", "ltd", "limited", "plc", "inc", "incorporated",
     "llc", "sa", "srl", "co", "corp", "corporation",
+    "sarl", "sas", "sasu", "eurl", "sci", "snc",  # France
+    "ug", "ohg", "kgaa", "se", "ev", "gbr", "mbh",  # Germany, EU
+    "spa", "sapa", "sl", "slu", "lda", "bvba", "vof", "cv", "ab", "as", "asa", "aps", "oy", "oyj",
+    "kft", "sro", "spzoo", "doo", "pty", "lp", "llp", "pc",
 }
 
 

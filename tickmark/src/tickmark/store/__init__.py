@@ -12,6 +12,7 @@ from tickmark.store.queries import (
            engagement_currency,
            engagement_line_items,
            engagement_period,
+           engagement_vat_rates,
            get_run,
            list_runs,
 )
@@ -22,7 +23,7 @@ __all__ = [
            "DECISIONS",
            "StoredRun",
            "TenantContext",
-           "add_review", "engagement_currency", "engagement_line_items", "engagement_period",
+           "add_review", "engagement_currency", "engagement_line_items", "engagement_period", "engagement_vat_rates",
            "get_run",
            "list_runs",
            "save_failed_run",

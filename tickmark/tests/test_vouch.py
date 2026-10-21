@@ -70,8 +70,11 @@ def test_one_cent_off_is_a_difference_but_rounding_noise_is_not():
     assert compare(row(amount=Decimal("121.01")), pdf())[1].result == "agrees"
 
 
-def test_low_confidence_values_are_unverifiable_not_agreeing():
-    assert {a.result for a in compare(row(), pdf(confidence=0.5))} == {"unverifiable"}
+def test_low_confidence_values_agree_when_equal_and_are_unverifiable_when_not():
+    assert {a.result for a in compare(row(), pdf(confidence=0.5), defaults={"currency": "EUR"})} == {"agrees"}
+    off = compare(row(amount=Decimal(1)), pdf(confidence=0.5), defaults={"currency": "EUR"})
+    assert next(a for a in off if a.field == "amount").result == "unverifiable"  # not 'differs'
+    assert verdict(row(amount=Decimal(1)), [pdf(confidence=0.5)]).verdict != "matched"
 
 
 # --- the invoice on its own -----------------------------------------------------------------------
@@ -222,3 +225,27 @@ def test_never_matched_without_a_currency_on_either_side():
     no_currency = Y2025.model_copy(update={"currency": None})
     assert verdict(row(), [pdf()], no_currency).verdict == "needs_review"  # the row (and engagement) say none
     assert verdict(row(), [pdf(currency="")]).verdict == "needs_review"  # the PDF says none
+
+
+def test_vat_with_a_breakdown_per_rate_and_without_one():
+    mixed = pdf(subtotal="473.00", tax="56.87", total="529.87")  # 19 % and 7 % on one invoice
+    y = Y2025.model_copy(update={"vat_rates": [Decimal(0), Decimal("0.07"), Decimal("0.19")]})
+    assert checks(mixed, y)["vat_rate"].status == "not_checkable"  # 12.02 %: between rates, no breakdown
+    mixed.tax_details = [{"rate": "7", "amount": "19.25"}, {"rate": "19", "amount": "37.62"}]
+    assert checks(mixed, y)["vat_rate"].status == "pass"
+    mixed.tax_details = [{"rate": "7", "amount": "19.25"}, {"rate": "16", "amount": "37.62"}]
+    assert "rate 16% not allowed" in checks(mixed, y)["vat_rate"].detail
+    one_wrong = pdf(subtotal="600.00", tax="114.00", total="714.00")  # 19 %, allowed 0/9/21: one rate, wrong
+    assert checks(one_wrong)["vat_rate"].status == "fail"
+
+
+def test_a_date_that_reads_both_ways_and_a_partly_read_name_are_not_differences():
+    swapped = compare(row(invoice_date=date(2025, 3, 11)), pdf(d="2025-11-03"), defaults={"currency": "EUR"})
+    assert next(a for a in swapped if a.field == "date").result == "unverifiable"
+    late = compare(row(invoice_date=date(2025, 3, 14)), pdf(d="2025-03-11"), defaults={"currency": "EUR"})
+    assert next(a for a in late if a.field == "date").result == "differs"  # 3 days: a real difference
+    part = compare(row(vendor="MVM Musterhafter Versicherungsverein"), pdf(vendor="Versicherungsverein"),
+                   defaults={"currency": "EUR"})
+    assert next(a for a in part if a.field == "vendor").result == "unverifiable"
+    other = compare(row(vendor="Globex"), pdf(vendor="Initech"), defaults={"currency": "EUR"})
+    assert next(a for a in other if a.field == "vendor").result == "differs"

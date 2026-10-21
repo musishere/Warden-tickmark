@@ -87,9 +87,13 @@ def test_strictly_better_row_keeps_contested_pdf():
     assert [(r.status, r.invoice_file) for r in res] == [("linked", "a.pdf"), ("needs_review", None)]
 
 
-def test_low_confidence_fields_are_not_evidence():
+def test_low_confidence_fields_agree_only_when_they_equal_the_row():
+    """Read with low confidence, but exactly what the row claims: that agrees (the reader never saw the
+    claim). A low-confidence value that differs proves nothing either way."""
     r = one({}, pdf("a.pdf", confidence=0.5))
-    assert r.status == "no_evidence"
+    assert r.status == "linked" and any("equals the row" in k.detail for c in r.comparisons for k in c.checks)
+    r = one({"amount": Decimal("999.00"), "invoice_date": date(2024, 1, 1)}, pdf("a.pdf", confidence=0.5))
+    assert r.status == "no_evidence"  # only the vendor agrees: not enough to link
 
 
 def test_total_that_does_not_reconcile_is_not_evidence():

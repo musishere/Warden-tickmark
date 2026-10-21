@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 os.environ.setdefault("TICKMARK_LOG_DIR", tempfile.mkdtemp(prefix="tickmark-test-logs-"))  # not data/logs
+os.environ.setdefault("TICKMARK_WEB_DEFAULT_ENGAGEMENT", "off")  # tests never write to the dev database
+os.environ.setdefault("TICKMARK_LLM_MAPPING", "off")  # nor call the LLM (test_llm_live.py does, opt-in)
 
 import pytest
 from alembic import command

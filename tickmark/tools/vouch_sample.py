@@ -15,10 +15,11 @@ from pathlib import Path
 
 from openpyxl.styles import Alignment, PatternFill
 
+from tickmark.config import settings
 from tickmark.fields.types import parse_currency
 from tickmark.models import Verdict
 from tickmark.pipeline import run_vouch
-from tickmark.vouch import MARK, VouchPolicy, parse_period
+from tickmark.vouch import MARK, VouchPolicy, parse_period, parse_rates
 from tools.identify_sample import (
     add_mapping_sheet,
     build_workbook,
@@ -101,6 +102,8 @@ def main() -> None:
     ap.add_argument("--period", help="audit period YYYY-MM-DD:YYYY-MM-DD (default with --save: the engagement's)")
     ap.add_argument("--currency", help="currency of rows that do not state one, e.g. EUR "
                                        "(default with --save: the engagement's)")
+    ap.add_argument("--vat-rates", help="allowed VAT rates in %%, e.g. 0,7,19 (default with --save: the "
+                                        "engagement's, else TICKMARK_VAT_RATES)")
     ap.add_argument("--trace", action="store_true", help="print every comparison, check and step")
     ap.add_argument("--out", type=Path, help="write verdicts, comparisons and checks to a workbook")
     ap.add_argument("--save", action="store_true", help="store the run (and verdicts) in the audit database")
@@ -140,7 +143,17 @@ def main() -> None:
         from tickmark.store import engagement_line_items
 
         line_items = engagement_line_items(ctx)
-    policy = VouchPolicy(period_start=period[0], period_end=period[1], currency=currency, line_items=bool(line_items))
+    vat_rates = args.vat_rates
+    if vat_rates is None and ctx:
+        from tickmark.store import engagement_vat_rates
+
+        vat_rates = engagement_vat_rates(ctx)
+    try:
+        rates = parse_rates(vat_rates or settings.vat_rates)
+    except ValueError as e:
+        ap.error(str(e))
+    policy = VouchPolicy(period_start=period[0], period_end=period[1], currency=currency, line_items=bool(line_items),
+                         vat_rates=rates)
 
     started = datetime.now(UTC)
     extractor = make_reader(args.labels, args.azure)

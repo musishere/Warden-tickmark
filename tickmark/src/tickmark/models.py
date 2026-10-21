@@ -49,6 +49,7 @@ class ExtractedField(BaseModel):
     value: str  # normalised: dates ISO, amounts plain decimal ("2971.36")
     confidence: float | None = None
     snip: Snip | None = None
+    corroborated: str = ""  # independent evidence the value is right, e.g. "net + tax = total on the invoice"
 
 
 class ExtractedLineItem(BaseModel):
@@ -82,6 +83,7 @@ class ExtractedInvoice(BaseModel):
     model_id: str = ""
     api_version: str | None = None
     raw: dict | None = Field(default=None, exclude=True)  # what the extractor returned, for the audit store
+    tax_details: list[dict] = Field(default_factory=list)  # VAT per rate as read: [{"rate": "19", "amount": "63.84"}]
     needs_ocr: list[str] = Field(default_factory=list)  # why the file cannot be read from its own text
     unread: dict[str, str] = Field(default_factory=dict)  # field -> why it was not read
     lines: list[TextLine] = Field(default_factory=list, exclude=True)  # the text, to find a value without a label

@@ -6,6 +6,7 @@ offline.
 """
 import hashlib
 import json
+import re
 from decimal import Decimal
 from pathlib import Path
 
@@ -100,7 +101,20 @@ def parse_result(result: dict, file: str) -> ExtractedInvoice:
         fields["currency"] = ExtractedField(name="currency", value=code, confidence=total.get("confidence"),
                                             snip=_snip(total, units))
     items = ((docs[0].get("fields") or {}).get("Items") or {}).get("valueArray") or []
-    return ExtractedInvoice(file=file, fields=fields, line_items=[_line(i, units) for i in items], **meta)
+    return ExtractedInvoice(file=file, fields=fields, line_items=[_line(i, units) for i in items],
+                            tax_details=_tax_details(docs[0].get("fields") or {}), **meta)
+
+
+def _tax_details(fields: dict) -> list[dict]:
+    """VAT per rate as Azure read it: [{"rate": "19", "amount": "63.84"}]; entries without a rate are left out."""
+    out = []
+    for item in (fields.get("TaxDetails") or {}).get("valueArray") or []:
+        obj = item.get("valueObject") or {}
+        rate = (obj.get("Rate") or {}).get("valueString") or (obj.get("Rate") or {}).get("content")
+        amount = _value(obj["Amount"], "currency") if obj.get("Amount") else None
+        if rate and amount is not None and (m := re.search(r"\d+(?:[.,]\d+)?", rate)):
+            out.append({"rate": m[0].replace(",", "."), "amount": amount})
+    return out
 
 
 def ocr_words(result: dict) -> list[tuple[int, float, list[dict]]]:

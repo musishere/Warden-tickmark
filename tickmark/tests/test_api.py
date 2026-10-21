@@ -144,3 +144,21 @@ def test_a_jobs_log_holds_only_its_own_lines():
         t.join()
     assert [x["msg"] for x in a] == ["job-a line 0", "job-a line 1", "job-a line 2"]
     assert [x["msg"] for x in b] == ["job-b line 0", "job-b line 1"] and b[0]["step"] == "test"
+
+
+def test_an_upload_without_a_chosen_engagement_is_saved_under_the_local_default(tenancy, monkeypatch):
+    sample, pdfs = generated()
+    app.state.db, app.state.admin_db = tenancy.app, tenancy.admin
+    monkeypatch.setattr(settings, "web_default_engagement", True)
+    try:
+        v = upload(sample, pdfs[:3], user="ali")
+        assert v["engagement"] and v["tenant"]
+        again = upload(sample, pdfs[:3], user="ali")
+        assert (again["tenant"], again["engagement"]) == (v["tenant"], v["engagement"])  # created once, reused
+        client.put(f"/api/workspaces/{v['id']}/mapping", json={"columns": v["mapping"]["columns"], "confirmed_by": "ali"})
+        j = wait(client.post(f"/api/workspaces/{v['id']}/runs", json={"azure": "off", "save": True}).json()["job"])
+        assert j["status"] == "done", j["error"] and j["result"]["run_id"]
+        listed = client.get(f"/api/engagements/{v['engagement']}/runs", params={"tenant": v["tenant"]}).json()
+        assert [r["id"] for r in listed] == [j["result"]["run_id"]]
+    finally:
+        app.state.db = app.state.admin_db = None

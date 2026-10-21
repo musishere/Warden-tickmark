@@ -22,9 +22,10 @@ from tickmark.definitions import INVOICE_VOUCHING
 from tickmark.fields.mapping import ColumnMapping, Meaning, headers_sha256, validate
 from tickmark.fields.types import parse_currency
 from tickmark.store import DECISIONS, TenantContext
-from tickmark.vouch import VouchPolicy, parse_period
+from tickmark.vouch import VouchPolicy, parse_period, parse_rates
 
 log.setup()
+api_log = log.get("api")
 STATIC = Path(__file__).parent / "static"
 app = FastAPI(title="Tickmark")
 app.state.db = None  # the app's database engine; tests point it at a throw-away database
@@ -64,13 +65,34 @@ def _ctx(tenant: str | None, engagement: str | None, user: str | None) -> Tenant
         raise HTTPException(400, f"bad firm or engagement id: {e}") from None
 
 
+def _default_ctx(user: str | None) -> TenantContext | None:
+    """The local firm + engagement an upload is saved under when none is chosen (created on first use),
+    so every run lands in the audit trail. None when switched off or the database is not reachable."""
+    if not settings.web_default_engagement:
+        return None
+    from tickmark.store.provision import add_engagement, add_tenant, list_tenants
+
+    try:
+        rows = list_tenants(app.state.admin_db)
+        firm = next((r for r in rows if r["name"] == settings.web_default_firm_name), None)
+        tenant_id = firm["id"] if firm else add_tenant(settings.web_default_firm_name, db=app.state.admin_db)
+        eng = next((r["engagement_id"] for r in rows if r["id"] == tenant_id
+                    and r["client_name"] == settings.web_default_engagement_name), None)
+        eng = eng or add_engagement(tenant_id, settings.web_default_engagement_name, db=app.state.admin_db)
+    except OperationalError:
+        api_log.warning("audit database not reachable: this upload will not be saved")
+        return None
+    return TenantContext(tenant_id, eng, user or "web")
+
+
 # --- upload and column meanings -------------------------------------------------------------------
 
 @app.post("/api/workspaces")
 async def create_workspace(sample: UploadFile = File(...), invoices: list[UploadFile] = File(default=[]),  # noqa: B008
                            tenant: str | None = Form(None), engagement: str | None = Form(None),
                            user: str | None = Form(None)) -> dict:
-    ws = await workspace.create(sample, invoices, _ctx(tenant, engagement, user), app.state.db)
+    ctx = _ctx(tenant, engagement, user) or _default_ctx(user)
+    ws = await workspace.create(sample, invoices, ctx, app.state.db)
     return workspace.view(ws)
 
 
@@ -144,6 +166,7 @@ class RunIn(BaseModel):
     currency: str | None = None  # with an engagement, its currency by default
     azure: str = settings.azure  # auto | off | always
     line_items: bool | None = None  # with an engagement, its setting by default; else off
+    vat_rates: str | None = None  # allowed VAT rates in %, e.g. "0,7,19"; else the engagement's, else settings
     save: bool = False  # store the run in the engagement's audit trail
 
 
@@ -161,16 +184,28 @@ def start_run(ws_id: str, body: RunIn) -> dict:
         currency = parse_currency(body.currency) if body.currency else None
     except ValueError as e:
         raise HTTPException(400, str(e)) from None
-    line_items = body.line_items
+    line_items, vat_rates = body.line_items, body.vat_rates
     if ws.ctx:  # the engagement's settings where the page leaves them empty
-        from tickmark.store import engagement_currency, engagement_line_items, engagement_period
+        from tickmark.store import (
+            engagement_currency,
+            engagement_line_items,
+            engagement_period,
+            engagement_vat_rates,
+        )
+
+        vat_rates = vat_rates or engagement_vat_rates(ws.ctx, app.state.db)
 
         if period == (None, None):
             period = engagement_period(ws.ctx, app.state.db)
         currency = currency or engagement_currency(ws.ctx, app.state.db)
         if line_items is None:
             line_items = engagement_line_items(ws.ctx, app.state.db)
-    policy = VouchPolicy(period_start=period[0], period_end=period[1], currency=currency, line_items=bool(line_items))
+    try:
+        rates = parse_rates(vat_rates or settings.vat_rates)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    policy = VouchPolicy(period_start=period[0], period_end=period[1], currency=currency, line_items=bool(line_items),
+                         vat_rates=rates)
     job = jobs.start(ws, policy, body.azure, body.save, app.state.db)
     return {"job": job.id}
 
@@ -201,6 +236,7 @@ class EngagementIn(BaseModel):
     period: str | None = None
     currency: str | None = None
     line_items: bool = False
+    vat_rates: str | None = None  # e.g. "0,7,19"
 
 
 @app.get("/api/tenants")
@@ -212,7 +248,7 @@ def tenants() -> list[dict]:
         firm = firms.setdefault(str(r["id"]), {"id": str(r["id"]), "name": r["name"], "engagements": []})
         if r["engagement_id"]:
             firm["engagements"].append(jsonable_encoder({k: r[k] for k in (
-                "engagement_id", "client_name", "period_start", "period_end", "currency", "line_items")}))
+                "engagement_id", "client_name", "period_start", "period_end", "currency", "line_items", "vat_rates")}))
     return list(firms.values())
 
 
@@ -225,7 +261,7 @@ def new_tenant(body: TenantIn) -> dict:
 
 @app.post("/api/tenants/{tenant_id}/engagements")
 def new_engagement(tenant_id: str, body: EngagementIn) -> dict:
-    from tickmark.store.provision import add_engagement, set_line_items
+    from tickmark.store.provision import add_engagement, set_line_items, set_vat_rates
 
     try:
         period = parse_period(body.period) if body.period else None
@@ -235,6 +271,11 @@ def new_engagement(tenant_id: str, body: EngagementIn) -> dict:
         raise HTTPException(400, str(e)) from None
     if body.line_items:
         set_line_items(eid, True, db=app.state.admin_db)
+    if body.vat_rates:
+        try:
+            set_vat_rates(eid, body.vat_rates, db=app.state.admin_db)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
     return {"id": str(eid)}
 
 

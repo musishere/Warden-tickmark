@@ -85,14 +85,45 @@ def lines_sum(inv: ExtractedInvoice, tol: Decimal) -> CheckResult:
                        snips=snips)
 
 
+def pct(rate: Decimal) -> str:
+    """0.19 -> '19%', 0.055 -> '5.5%'."""
+    return f"{(rate * 100).normalize():f}%"
+
+
 def vat_rate(inv: ExtractedInvoice, policy: VouchPolicy) -> CheckResult:
-    (sub, tax), missing = _amounts(inv, "subtotal", "tax")
+    """With a VAT breakdown per rate: every rate allowed and the parts add up to the tax. Without one:
+    the tax is one allowed rate of the net; a share between two allowed rates may be several rates,
+    so it is not checkable (👀), not a failure."""
     snips = _snips(inv, "subtotal", "tax")
+    allowed = ", ".join(pct(r) for r in policy.vat_rates)
+    if inv.tax_details:
+        (tax,), missing = _amounts(inv, "tax")
+        parts = [(Decimal(d["rate"]) / 100, Decimal(d["amount"])) for d in inv.tax_details]
+        if bad := sorted({r for r, _ in parts if all(abs(r - a) > Decimal("0.0001") for a in policy.vat_rates)}):
+            return CheckResult(name="vat_rate", status="fail", snips=snips,
+                               detail=f"rate {', '.join(pct(r) for r in bad)} not allowed ({allowed})")
+        shown = " + ".join(f"{a} at {pct(r)}" for r, a in parts)
+        if missing:
+            return CheckResult(name="vat_rate", status="not_checkable", detail=missing, snips=snips)
+        if abs(sum(a for _, a in parts) - tax) <= policy.amount_tol:
+            return CheckResult(name="vat_rate", status="pass", detail=f"tax {tax} = {shown}", snips=snips)
+        return CheckResult(name="vat_rate", status="not_checkable", snips=snips,
+                           detail=f"the VAT breakdown {shown} does not add up to the tax {tax}")
+    (sub, tax), missing = _amounts(inv, "subtotal", "tax")
     if missing:
         return CheckResult(name="vat_rate", status="not_checkable", detail=missing, snips=snips)
     rate = vat_rate_matches(sub, tax, policy.vat_rates, policy.amount_tol)
     if rate is not None:
         return CheckResult(name="vat_rate", status="pass", detail=f"tax {tax} = {rate:%} of {sub}", snips=snips)
+    share = tax / sub if sub else None
+    one = (share * 200).quantize(Decimal(1)) / 200 if share is not None else None  # nearest 0.5 %
+    if one is not None and abs(sub * one - tax) <= policy.amount_tol:  # one rate, just not an allowed one
+        return CheckResult(name="vat_rate", status="fail", snips=snips,
+                           detail=f"tax {tax} is {pct(one)} of {sub}: not an allowed rate ({allowed})")
+    if share is not None and min(policy.vat_rates) < share < max(policy.vat_rates):
+        return CheckResult(name="vat_rate", status="not_checkable", snips=snips,
+                           detail=f"tax {tax} is {share:.2%} of {sub}: between allowed rates ({allowed}), "
+                                  "perhaps several rates; no breakdown per rate was read")
     expected = ", ".join(f"{r:.0%} → {money(sub * r)}" for r in policy.vat_rates)
     return CheckResult(name="vat_rate", status="fail", snips=snips,
                        detail=f"tax {tax} is not an allowed rate of {sub} ({expected})")

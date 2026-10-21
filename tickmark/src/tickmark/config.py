@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     header_scan_rows: int = 20  # the header row is looked for in this many non-blank rows at the top
     # Reading PDFs: locally from their own text first; Azure only where that is not reliable.
     azure: str = "auto"  # auto: only where needed | off: never (those rows are 👀) | always: every PDF
+    confidence_min: float = 0.90  # a value read with less confidence counts only if something else confirms it
+    vat_rates: str = "0,9,21"  # allowed VAT rates in %, when the engagement and the run set none
+    read_concurrency: int = 8  # PDFs read at the same time (Azure answers in ~15 s per PDF; S0 allows 15/s)
     pdf_min_chars: int = 30  # a page with fewer text characters but an image is a scan
     pdf_image_cover: float = 0.7  # text over an image covering this share of the page is a scanner's OCR
     pdf_bad_chars: float = 0.02  # more unreadable characters than this share: the font has no text map
@@ -33,6 +36,10 @@ class Settings(BaseSettings):
     log_level: str = "INFO"  # INFO: each step's decision; DEBUG: every candidate and comparison too
     log_dir: str = "data/logs"  # tickmark.log, rotated (holds client values: local use)
     upload_dir: str = "data/uploads"  # files uploaded through the web app, one folder per upload
+    # web app: an upload without a chosen firm/engagement is saved under this local default (created on use)
+    web_default_engagement: bool = True
+    web_default_firm_name: str = "Local firm"
+    web_default_engagement_name: str = "Default engagement"
 
 
 settings = Settings()

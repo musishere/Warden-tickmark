@@ -42,7 +42,7 @@ async function loadTenants() {
 function fillEngagements() {
   const firm = state.tenants.find((f) => f.id === $("#tenant").value);
   $("#engagement").innerHTML = `<option value="">— none —</option>` + (firm?.engagements || []).map((e) =>
-    `<option value="${e.engagement_id}">${esc(e.client_name)}${e.currency ? " · " + e.currency : ""}${e.period_start ? " · " + e.period_start + "…" + e.period_end : ""}</option>`).join("");
+    `<option value="${e.engagement_id}">${esc(e.client_name)}${e.currency ? " · " + e.currency : ""}${e.vat_rates ? " · VAT " + e.vat_rates + "%" : ""}${e.period_start ? " · " + e.period_start + "…" + e.period_end : ""}</option>`).join("");
 }
 
 $("#tenant").onchange = fillEngagements;
@@ -57,7 +57,8 @@ $("#add-engagement").onclick = async () => {
   const tenant = $("#tenant").value;
   if (!tenant) return alert("Choose a firm first.");
   const body = { client_name: $("#new-client").value.trim(), period: $("#new-period").value.trim() || null,
-                 currency: $("#new-currency").value.trim() || null, line_items: $("#new-lines").checked };
+                 currency: $("#new-currency").value.trim() || null, line_items: $("#new-lines").checked,
+                 vat_rates: $("#new-vat").value.trim() || null };
   const r = await api(`/api/tenants/${tenant}/engagements`, json("POST", body)).catch(alertErr);
   if (!r) return;
   await loadTenants();
@@ -78,10 +79,15 @@ $("#upload-form").onsubmit = async (ev) => {
   }
   fd.append("user", $("#user").value);
   try {
-    showView(await api("/api/workspaces", { method: "POST", body: fd }));
+    const v = await api("/api/workspaces", { method: "POST", body: fd });
+    showView(v);
     $("#s-columns").hidden = $("#s-run").hidden = false;
-    $("#save").disabled = !$("#engagement").value;
-    $("#save").checked = !!$("#engagement").value;
+    $("#save").disabled = !v.engagement;  // saved under the chosen engagement, or the local default one
+    $("#save").checked = !!v.engagement;
+    if (v.engagement && !$("#engagement").value) {  // the local default: show it as chosen
+      await loadTenants();
+      $("#tenant").value = v.tenant; fillEngagements(); $("#engagement").value = v.engagement;
+    }
     loadPast();
   } catch (e) { alertErr(e); }
 };
@@ -152,7 +158,8 @@ $("#confirm").onclick = async () => {
 $("#run").onclick = async () => {
   const start = $("#p-start").value, end = $("#p-end").value;
   const body = { period: start && end ? `${start}:${end}` : null, currency: $("#currency").value.trim() || null,
-                 azure: $("#azure").value, line_items: $("#line-items").checked || null, save: $("#save").checked };
+                 azure: $("#azure").value, line_items: $("#line-items").checked || null, save: $("#save").checked,
+                 vat_rates: $("#vat-rates").value.trim() || null };
   try {
     const { job } = await api(`/api/workspaces/${state.ws}/runs`, json("POST", body));
     state.job = job; state.logs = [];
@@ -162,7 +169,13 @@ $("#run").onclick = async () => {
 };
 
 async function poll(since) {
-  const j = await api(`/api/jobs/${state.job}?since=${since}`);
+  let j;
+  try { j = await api(`/api/jobs/${state.job}?since=${since}`); }
+  catch (e) {  // e.g. the server restarted: the run is gone, say so instead of waiting forever
+    $("#job-status").textContent = `run lost (${e.message}) - the server probably restarted; click Run again (Azure results are cached)`;
+    $("#run").disabled = false;
+    return;
+  }
   state.logs.push(...j.logs);
   renderLog();
   $("#job-status").textContent = j.status === "running" ? "running…" : j.status === "failed" ? `failed: ${j.error}` : "done";

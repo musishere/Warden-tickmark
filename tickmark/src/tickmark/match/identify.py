@@ -5,7 +5,8 @@ corroborated. Anything less is needs_review (with the candidates) or no_evidence
 would put a PDF behind a row it does not support, which is the one outcome this must never produce.
 
 Rules, in order:
-  1. Only trusted extracted fields count: confidence >= CONFIDENCE_MIN and parseable. The total
+  1. Only trusted extracted fields count: confidence >= CONFIDENCE_MIN or confirmed independently
+     (tickmark.extract.text.untrusted), and parseable. The total
      counts only if subtotal + tax reconciles to it.
   2. Invoice number equal + at least one more field equal -> can link. Number alone -> review.
   3. Without a usable number: vendor equal + (amount or date equal) -> can link.
@@ -22,8 +23,9 @@ from decimal import Decimal, InvalidOperation
 
 from rapidfuzz import fuzz
 
+from tickmark.config import settings
 from tickmark.definitions import INVOICE_VOUCHING, Definition, FieldSpec
-from tickmark.extract.text import found_in_text, normalize_number
+from tickmark.extract.text import found_in_text, normalize_number, untrusted
 from tickmark.log import get
 from tickmark.models import (
     Candidate,
@@ -38,7 +40,7 @@ from tickmark.models import (
 from tickmark.sample import normalize_vendor
 
 log = get("identify")
-CONFIDENCE_MIN = 0.90
+CONFIDENCE_MIN = settings.confidence_min  # below it a value needs independent confirmation (untrusted)
 VENDOR_SIMILAR = 90  # rapidfuzz token_sort_ratio on vendor keys: similar enough to review
 AMOUNT_TOL = Decimal("0.01")
 # Recorded with every stored run, so an old result can be explained after the rules change.
@@ -55,6 +57,7 @@ class _Pdf:
     snips: dict[str, Snip] = field(default_factory=dict)
     fields: dict[str, PdfField] = field(default_factory=dict)
     inv: ExtractedInvoice | None = None  # for values printed without a label (found_in_text)
+    weak: dict[str, object] = field(default_factory=dict)  # evidence field -> value read but not trusted
 
 
 @dataclass
@@ -79,13 +82,7 @@ def pdf_fields(inv: ExtractedInvoice, definition: Definition = INVOICE_VOUCHING)
 def _trusted(inv: ExtractedInvoice, definition: Definition = INVOICE_VOUCHING) -> _Pdf:
     pdf = _Pdf(file=inv.file, inv=inv)
     for name, f in inv.fields.items():
-        why = ""
-        if f.confidence is None:
-            why = "no confidence reported"
-        elif f.confidence < CONFIDENCE_MIN:
-            why = f"confidence {f.confidence:.2f} < {CONFIDENCE_MIN}"
-        elif not f.value.strip():
-            why = "empty"
+        why = untrusted(f) or ("" if f.value.strip() else "empty")
         pdf.fields[name] = PdfField(name=name, value=f.value, confidence=f.confidence,
                                     trusted=not why, why_not=why, snip=f.snip)
         if f.snip:
@@ -135,7 +132,28 @@ def _trusted(inv: ExtractedInvoice, definition: Definition = INVOICE_VOUCHING) -
             distrust(ev, f"{terms} = {sum(part_values)} ≠ {ev} {total}")
         else:
             pdf.value[ev], pdf.shown[ev] = total, str(total)
+    # values read but not trusted (low confidence, total not reconciling): they may still agree with a row's
+    # claim - the reader never saw the claim, so landing on it by mistake is not plausible - but never conflict
+    for spec in definition.linking:
+        ev, f = spec.evidence_field, inv.fields.get(spec.evidence_field)
+        if f is None or ev in pdf.key or ev in pdf.value or not f.value.strip() or not untrusted(f):
+            continue  # only low confidence makes a value weak; a total that does not reconcile stays out
+        try:
+            pdf.weak[ev] = {"identifier": normalize_number, "name": normalize_vendor, "date": date.fromisoformat,
+                            "money": Decimal}.get(spec.type, str)(f.value.strip())
+        except (ValueError, InvalidOperation):
+            pass
     return pdf
+
+
+def _weak_agrees(spec: FieldSpec, cr: CleanRow, rv, weak) -> bool:
+    if spec.type == "identifier":
+        return bool(weak) and normalize_number(str(rv)) == weak
+    if spec.type == "name":
+        return bool(weak) and weak in (cr.vendor_key if spec.role == "party" else None, normalize_vendor(str(rv)))
+    if spec.type == "money":
+        return abs(rv - weak) <= AMOUNT_TOL
+    return rv == weak
 
 
 def _shown(pdf: _Pdf, name: str) -> str:
@@ -178,6 +196,12 @@ def _compare(cr: CleanRow, pdf: _Pdf, definition: Definition = INVOICE_VOUCHING)
             pdf.shown.setdefault(ev, snip.text)
             checks.append(FieldCheck(field=spec.label, row_value=str(rv), pdf_value=snip.text, result="equal",
                                      detail="printed without a label"))
+            continue
+        if ev in pdf.weak and _weak_agrees(spec, cr, rv, pdf.weak[ev]):
+            agree.append(spec.label)
+            pdf.shown.setdefault(ev, pdf.fields[ev].value)
+            checks.append(FieldCheck(field=spec.label, row_value=str(rv), pdf_value=pdf.fields[ev].value, result="equal",
+                                     detail=f"{pdf.fields[ev].why_not}; equals the row"))
             continue
         if spec.role == "key":
             ref = normalize_number(rv)

@@ -226,8 +226,8 @@ def tough(out: Path) -> None:
             "T-03": "⚠️ net amount differs: 1310.00 claimed, 1300.00 on the invoice",
             "T-04": "auto: ✅ (scanned, read by Azure) | off: ❓ not read (needs OCR)",
             "T-05": "auto: ✅ (two different totals, Azure settles it) | off: 👀 total not read clearly",
-            "T-06": "auto: ⚠️ vendor differs: 'Contoso Ltd' vs 'Contoso Labs Ltd' (linked on number + amount) | "
-                    "off: 👀 vendor not confirmed (a look-alike in the letterhead is never 'agrees')",
+            "T-06": "👀 look-alike vendor: 'Contoso Ltd' vs 'Contoso Labs Ltd' - one name is part of the other, "
+                    "so a person decides (never ✅)",
             "T-07": "⚠️ VAT 19% is not an allowed rate",
             "T-08": "⚠️ invoice dated 2024-12-20, outside the audit period",
             "T-09": "auto: ⚠️ same vendor and number on t09.pdf and t10.pdf (double billing) | "
