@@ -20,7 +20,7 @@ Each step is small: a few files, one test that proves it, and a commit.
 - [x] 1. `dotnet` on PATH, Postgres via Docker Compose, CI runs `dotnet test`
 
 ### Phase 1 — The data
-- [ ] 2. Tenants, users, agents, engagements, members (roles); first migration
+- [x] 2. Tenants, users, agents, engagements, members (roles); first migration
 - [ ] 3. Ethical walls + demo seed (Firm A: Coke, Pepsi with a wall; Firm B: Acme; Sara, Ali, admin; Tickmark agent)
 
 ### Phase 2 — Identity
