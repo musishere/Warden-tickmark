@@ -25,7 +25,16 @@ public class SecurityGuaranteeTests(WardenFactory warden)
 
     [Fact(Skip = "step 7")] public void ethical_wall_blocks_even_admin() { }
     [Fact(Skip = "step 13")] public void scim_deactivation_revokes_agent_tokens() { }
-    [Fact(Skip = "step 6c")] public void expired_delegated_token_is_rejected() { }
+    // A real Warden pass, in the logbook, not revoked, but expired a minute ago: refused.
+    [Fact]
+    public async Task expired_delegated_token_is_rejected()
+    {
+        var pass = warden.Stamp(WardenFactory.SaraOnCoke(expires: DateTime.UtcNow.AddMinutes(-1)));
+        var check = await warden.Check(pass);
+        Assert.False(check.Ok);
+        Assert.Equal("pass expired", check.Reason);
+    }
+
     [Fact(Skip = "later: credits")] public void concurrent_requests_cannot_overspend_credits() { }
     [Fact(Skip = "step 10")] public void prompt_injection_cannot_trigger_export() { }
     [Fact(Skip = "later: human approval")] public void override_requires_human_approval() { }

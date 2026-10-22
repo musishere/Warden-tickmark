@@ -23,6 +23,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Warden.Api.Auth;
 using Warden.Api.Data;
+using Warden.Core.Domain;
 using Xunit;
 
 namespace Warden.Tests;
@@ -50,6 +51,34 @@ public class WardenFactory : WebApplicationFactory<Program>
     public string SignIn(Guid userId, Guid tenantId) =>
         DevIssuer.CreateToken(DevIssuer.SigningKey(Services.GetRequiredService<IConfiguration>()),
             userId, tenantId, "demo", DateTime.UtcNow.AddHours(1));
+
+    // A logbook row for Sara + Tickmark on Coke, expiring at `expires` (tests tweak it).
+    public static DelegatedToken SaraOnCoke(DateTime expires) => new()
+    {
+        TenantId = DemoSeed.FirmA, UserId = DemoSeed.Sara, AgentId = DemoSeed.Tickmark,
+        EngagementId = DemoSeed.Coke, Scope = "documents.read", IssuedAt = expires.AddMinutes(-15), ExpiresAt = expires,
+    };
+
+    // Stamp a pass for a row with Warden's real key; save the row to the logbook unless told not to.
+    public string Stamp(DelegatedToken row, bool saveToLogbook = true)
+    {
+        using var scope = Services.CreateScope();
+        if (saveToLogbook)
+        {
+            var db = scope.ServiceProvider.GetRequiredService<WardenDbContext>();
+            db.DelegatedTokens.Add(row);
+            db.SaveChanges();
+        }
+        return AgentPass.Create(row, Services.GetRequiredService<WardenSigningKey>());
+    }
+
+    // What the gate will do (step 9): check a pass.
+    public async Task<AgentPass.CheckResult> Check(string pass)
+    {
+        using var scope = Services.CreateScope();
+        return await AgentPass.Check(pass, Services.GetRequiredService<WardenSigningKey>(),
+            scope.ServiceProvider.GetRequiredService<WardenDbContext>());
+    }
 
     // What an agent does: POST /token/exchange with the user's sign-in token.
     public Task<HttpResponseMessage> Exchange(Guid userId, Guid tenantId, Guid agentId, Guid engagementId, string scope)
