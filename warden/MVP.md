@@ -37,8 +37,8 @@ Each step is small: a few files, one test that proves it, and a commit.
 - [x] 10. Tools: `list_documents`, `read_document`, `run_vouch`; `export_documents` denied to agents — `prompt_injection_cannot_trigger_export`
 
 ### Phase 5 — Tickmark through Warden
-- [ ] 11. Tickmark's tool endpoints accept only Warden-forwarded calls
-- [ ] 12. Tickmark vouches via `WardenClient`: Coke allowed, Pepsi denied, both logged
+- [x] 11. Tickmark's tool endpoints accept only Warden-forwarded calls
+- [x] 12. Tickmark vouches via `WardenClient`: Coke allowed, Pepsi denied, both logged
 
 ### Phase 6 — The off switch
 - [ ] 13. Revoke by `jti` + `PATCH /scim/v2/Users/{id}` revokes all agent passes; running work stops — `scim_deactivation_revokes_agent_tokens`
