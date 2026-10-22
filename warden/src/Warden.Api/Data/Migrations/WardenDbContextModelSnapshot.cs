@@ -265,6 +265,14 @@ namespace Warden.Api.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("email");
 
+                    b.Property<Guid?>("EntraObjectId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("entra_object_id");
+
+                    b.Property<Guid?>("EntraTenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("entra_tenant_id");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("text")
@@ -276,6 +284,10 @@ namespace Warden.Api.Data.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_users");
+
+                    b.HasIndex("EntraTenantId", "EntraObjectId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_users_entra_tenant_id_entra_object_id");
 
                     b.HasIndex("TenantId", "Email")
                         .IsUnique()

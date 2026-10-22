@@ -21,12 +21,18 @@ using System.Net.Http.Headers;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Security.Cryptography;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.IdentityModel.JsonWebTokens;
+using Microsoft.IdentityModel.Protocols;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
+using Microsoft.IdentityModel.Tokens;
 using Warden.Api.Auth;
 using Warden.Api.Data;
 using Warden.Core.Domain;
@@ -44,13 +50,39 @@ public class WardenFactory : WebApplicationFactory<Program>
 
     public FakeTools Tools { get; } = new();
     public const string ScimSecret = "firm-a-scim-secret-for-tests";
+    public static readonly Guid FakeEntraTenant = Guid.Parse("e17a0000-0000-0000-0000-000000000001");
+    public const string FakeEntraClient = "warden-test-api";
+    public static readonly RsaSecurityKey FakeEntraKey = new(RSA.Create(2048)) { KeyId = "fake-entra" };
+
+    // A token as Entra would issue it for Warden (tests change the parts they want wrong).
+    public static string EntraToken(Guid oid, Guid? tid = null, string audience = FakeEntraClient, SecurityKey? key = null)
+    {
+        var t = tid ?? FakeEntraTenant;
+        return new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
+        {
+            Issuer = $"https://login.microsoftonline.com/{t}/v2.0",
+            Audience = audience,
+            Claims = new Dictionary<string, object> { ["oid"] = oid.ToString(), ["tid"] = t.ToString() },
+            Expires = DateTime.UtcNow.AddHours(1),
+            SigningCredentials = new SigningCredentials(key ?? FakeEntraKey, SecurityAlgorithms.RsaSha256),
+        });
+    }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseSetting("ConnectionStrings:Warden", TestDb);
         builder.UseSetting($"Scim:Tenants:{DemoSeed.FirmA}", ScimSecret);  // Firm A's identity provider
+        // A FAKE Entra tenant: switched on like the real one, but its "public keys" are FakeEntraKey's,
+        // handed over directly instead of downloaded from Microsoft.
+        builder.UseSetting("Entra:TenantId", FakeEntraTenant.ToString());
+        builder.UseSetting("Entra:ClientId", FakeEntraClient);
         // The "tools" HttpClient sends to FakeTools instead of the network.
-        builder.ConfigureTestServices(s => s.AddHttpClient("tools").ConfigurePrimaryHttpMessageHandler(() => Tools));
+        builder.ConfigureTestServices(s =>
+        {
+            s.AddHttpClient("tools").ConfigurePrimaryHttpMessageHandler(() => Tools);
+            s.PostConfigure<JwtBearerOptions>(EntraSignIn.Scheme, o => o.ConfigurationManager =
+                new StaticConfigurationManager<OpenIdConnectConfiguration>(new OpenIdConnectConfiguration { SigningKeys = { FakeEntraKey } }));
+        });
     }
 
     public WardenFactory()

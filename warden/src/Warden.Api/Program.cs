@@ -17,6 +17,7 @@
  * Command-line extras (run, do the job, exit):
  *   dotnet run -- seed             insert the demo data (Data/DemoSeed.cs)
  *   dotnet run -- dev-token sara   print a dev sign-in token for a demo user
+ *   dotnet run -- link-entra sara <tid> <oid>   let a real Entra account sign in as that user
  *
  * The last line ("public partial class Program;") lets the test project start
  * this app in memory (WebApplicationFactory<Program>), like FastAPI's TestClient.
@@ -38,7 +39,7 @@ builder.Services.AddDbContext<WardenDbContext>(o => o
     .UseSnakeCaseNamingConvention());
 
 // Sign-in tokens: "Authorization: Bearer <JWT>" on every request.
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(o =>
+var auth = builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(o =>
 {
     o.MapInboundClaims = false;  // keep claim names as sent ("oid", "tid"); .NET renames them otherwise
     o.TokenValidationParameters = new TokenValidationParameters
@@ -52,6 +53,15 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJw
     if (builder.Environment.IsDevelopment())
         o.TokenValidationParameters.IssuerSigningKey = DevIssuer.SigningKey(builder.Configuration);
 });
+
+// Real Microsoft Entra ID sign-in, when Entra:TenantId + Entra:ClientId are set (Auth/EntraSignIn.cs).
+// A request may then sign in with either kind of token ("schemes"); both end up as a Warden user.
+string[] signInSchemes = [JwtBearerDefaults.AuthenticationScheme];
+if (EntraSignIn.IsConfigured(builder.Configuration))
+{
+    auth.AddJwtBearer(EntraSignIn.Scheme, o => EntraSignIn.Configure(o, builder.Configuration));
+    signInSchemes = [.. signInSchemes, EntraSignIn.Scheme];
+}
 
 // Warden's own key pair for signing agent passes (Auth/WardenSigningKey.cs).
 // Singleton = one instance for the whole app, so every pass is signed with the same key.
@@ -67,7 +77,7 @@ builder.Services.AddHttpClient("tools", c =>
 
 // Locked by default: every endpoint requires a verified token that says who (oid) and
 // which firm (tid). An endpoint is public only if it says [AllowAnonymous] (like /health).
-builder.Services.AddAuthorizationBuilder().SetFallbackPolicy(new AuthorizationPolicyBuilder()
+builder.Services.AddAuthorizationBuilder().SetFallbackPolicy(new AuthorizationPolicyBuilder(signInSchemes)
     .RequireAuthenticatedUser()
     .RequireClaim("oid")
     .RequireClaim("tid")
@@ -82,6 +92,18 @@ if (args.Contains("seed"))
     using var scope = app.Services.CreateScope();
     DemoSeed.Run(scope.ServiceProvider.GetRequiredService<WardenDbContext>());
     Console.WriteLine("Demo data ready (skipped anything already there).");
+    return;
+}
+
+// `dotnet run -- link-entra sara <tid> <oid>`: let a real Entra account sign in as a demo user (step 14).
+if (args.Length == 4 && args[0] == "link-entra")
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<WardenDbContext>();
+    var user = db.Users.Single(u => u.Name.ToLower() == args[1].ToLower());
+    (user.EntraTenantId, user.EntraObjectId) = (Guid.Parse(args[2]), Guid.Parse(args[3]));
+    db.SaveChanges();
+    Console.WriteLine($"{user.Name} now signs in with Entra account {args[3]} (tenant {args[2]}).");
     return;
 }
 

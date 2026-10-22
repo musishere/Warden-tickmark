@@ -41,6 +41,8 @@ public class WardenDbContext(DbContextOptions<WardenDbContext> options) : DbCont
         // A user belongs to a real tenant; one email per tenant.
         b.Entity<User>().HasOne<Tenant>().WithMany().HasForeignKey(u => u.TenantId).OnDelete(DeleteBehavior.Restrict);
         b.Entity<User>().HasIndex(u => new { u.TenantId, u.Email }).IsUnique();
+        // One Warden user per Entra account (Postgres allows many rows where both are null).
+        b.Entity<User>().HasIndex(u => new { u.EntraTenantId, u.EntraObjectId }).IsUnique();
 
         // An engagement belongs to a real tenant.
         b.Entity<Engagement>().HasOne<Tenant>().WithMany().HasForeignKey(e => e.TenantId).OnDelete(DeleteBehavior.Restrict);
