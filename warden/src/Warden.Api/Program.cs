@@ -8,7 +8,8 @@
  *      AddDbContext = "give out database sessions",
  *      AddAuthentication = "read and verify the sign-in token on each request",
  *      AddAuthorization  = "decide if that caller may use the endpoint",
- *      AddSingleton<WardenSigningKey> = "one shared key pair for signing agent passes".
+ *      AddSingleton<WardenSigningKey> = "one shared key pair for signing agent passes",
+ *      AddHttpClient("tools") = "how to reach the tool server behind the gate".
  *   3. Build, then the middleware pipeline: each request passes through
  *      UseAuthentication -> UseAuthorization -> the controller, in that order.
  *   4. Run: starts the HTTP server and blocks until it stops.
@@ -55,6 +56,14 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJw
 // Warden's own key pair for signing agent passes (Auth/WardenSigningKey.cs).
 // Singleton = one instance for the whole app, so every pass is signed with the same key.
 builder.Services.AddSingleton<WardenSigningKey>();
+
+// The tool server behind the gate (Tickmark). The gate forwards approved calls here
+// (Controllers/ToolGateController.cs). Tests swap in a fake (WardenFactory.cs).
+builder.Services.AddHttpClient("tools", c =>
+{
+    c.BaseAddress = new Uri(builder.Configuration["Tools:BaseUrl"]!);
+    c.Timeout = TimeSpan.FromMinutes(5);  // run_vouch reads every PDF: it can take a while
+});
 
 // Locked by default: every endpoint requires a verified token that says who (oid) and
 // which firm (tid). An endpoint is public only if it says [AllowAnonymous] (like /health).

@@ -33,8 +33,8 @@ Each step is small: a few files, one test that proves it, and a commit.
 - [x] 8. Append-only audit log + `GET /audit?engagement=`
 
 ### Phase 4 — The gate
-- [ ] 9. `POST /tools/{tool}/invoke`: check pass (signature, expiry, audience, not revoked) → decide → log → forward; any error = deny
-- [ ] 10. Tools: `list_documents`, `read_document`, `run_vouch`; `export_documents` denied to agents — `prompt_injection_cannot_trigger_export`
+- [x] 9. `POST /tools/{tool}/invoke`: check pass (signature, expiry, audience, not revoked) → decide → log → forward; any error = deny
+- [x] 10. Tools: `list_documents`, `read_document`, `run_vouch`; `export_documents` denied to agents — `prompt_injection_cannot_trigger_export`
 
 ### Phase 5 — Tickmark through Warden
 - [ ] 11. Tickmark's tool endpoints accept only Warden-forwarded calls

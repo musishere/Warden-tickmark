@@ -18,6 +18,14 @@
  *   Layer 2, the logbook: the jti is in delegated_tokens and RevokedAt is empty.
  *   Any failure -> not OK, with a short reason. On success it returns the logbook row,
  *   which says exactly who, which agent, which engagement and which scopes.
+ *   A REVOKED pass also returns its row (still not OK), so the refusal can be audited
+ *   under the right firm and engagement.
+ *
+ * CreateForward(...) is what the gate sends ON to the tool server (Tickmark) after saying yes:
+ *   a separate, 60-second token, aud = "tickmark-tools", for ONE tool. The agent's own pass
+ *   (aud = warden-tools) is never accepted by the tool server, so an agent can't skip Warden
+ *   by calling Tickmark directly. Claims: sub, act, tid, eng (as in the pass), tool, scope
+ *   (the one scope the tool needs), pass (the pass's jti, to link the two in logs).
  */
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
@@ -52,6 +60,34 @@ public static class AgentPass
             SigningCredentials = key.Credentials,
         });
 
+    public static readonly TimeSpan ForwardLifetime = TimeSpan.FromSeconds(60);
+
+    // The token the gate forwards to the tool server: one tool, one minute.
+    public static string CreateForward(DelegatedToken pass, string tool, string scope, string audience, WardenSigningKey key)
+    {
+        var now = DateTime.UtcNow;
+        return new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
+        {
+            Issuer = Issuer,
+            Audience = audience,
+            Claims = new Dictionary<string, object>
+            {
+                ["sub"] = pass.UserId.ToString(),
+                ["act"] = new Dictionary<string, object> { ["sub"] = pass.AgentId.ToString() },
+                ["tid"] = pass.TenantId.ToString(),
+                ["eng"] = pass.EngagementId.ToString(),
+                ["tool"] = tool,
+                ["scope"] = scope,
+                ["pass"] = pass.Jti.ToString(),
+                ["jti"] = Guid.NewGuid().ToString(),
+            },
+            IssuedAt = now,
+            NotBefore = now,
+            Expires = now + ForwardLifetime,
+            SigningCredentials = key.Credentials,
+        });
+    }
+
     // The result of checking a pass: OK + the logbook row, or not OK + why.
     public record CheckResult(bool Ok, string? Reason, DelegatedToken? Row);
 
@@ -80,7 +116,7 @@ public static class AgentPass
             return Fail("pass has no id");
         var row = await db.DelegatedTokens.FindAsync(jti);
         if (row is null) return Fail("pass not in logbook");
-        if (row.RevokedAt is not null) return Fail("pass revoked");
+        if (row.RevokedAt is not null) return new CheckResult(false, "pass revoked", row);
 
         return new CheckResult(true, null, row);
     }
