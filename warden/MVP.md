@@ -29,7 +29,7 @@ Each step is small: a few files, one test that proves it, and a commit.
 - [x] 6. `POST /token/exchange` (stored by `jti`) — `agent_cannot_exceed_user_permissions`, `expired_delegated_token_is_rejected`
 
 ### Phase 3 — The rules
-- [ ] 7. Decision function: walls → membership → role → tool policy → scope, with a reason — `ethical_wall_blocks_even_admin`, `tenant_a_cannot_read_tenant_b`
+- [x] 7. Decision function: walls → membership → role → tool policy → scope, with a reason — `ethical_wall_blocks_even_admin`, `tenant_a_cannot_read_tenant_b`
 - [ ] 8. Append-only audit log + `GET /audit?engagement=`
 
 ### Phase 4 — The gate

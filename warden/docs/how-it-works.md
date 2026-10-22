@@ -1,6 +1,6 @@
 # How Warden works (so far)
 
-A walkthrough of everything built up to **step 6** (6a–6c) of [MVP.md](../MVP.md), with diagrams.
+A walkthrough of everything built up to **step 7** of [MVP.md](../MVP.md), with diagrams.
 Diagrams are [Mermaid](https://mermaid.js.org): GitHub and VS Code (with a Mermaid extension)
 draw them as pictures.
 
@@ -37,7 +37,7 @@ flowchart LR
     Tools -.->|check pass signature| Jwks
 ```
 
-Solid lines are built. Dotted lines are coming (steps 7–12).
+Solid lines are built. Dotted lines are coming (steps 8–12).
 
 ---
 
@@ -47,7 +47,7 @@ Solid lines are built. Dotted lines are coming (steps 7–12).
 flowchart TB
     subgraph Core[Warden.Core - plain C#, no web, no database]
         Domain[Domain/<br/>Tenant, User, Agent, Engagement,<br/>Member + Role, EthicalWall,<br/>DelegatedToken]
-        Perm[Permissions.cs<br/>role -> allowed scopes]
+        Perm[Permissions.cs<br/>role -> allowed scopes,<br/>tool -> scope + agents allowed?]
     end
     subgraph Api[Warden.Api - the web app]
         Prog[Program.cs<br/>startup, auth, DI,<br/>seed / dev-token commands]
@@ -60,6 +60,7 @@ flowchart TB
             Dev[DevIssuer.cs<br/>fake sign-in tokens]
             Key[WardenSigningKey.cs<br/>RSA key pair]
             Pass[AgentPass.cs<br/>what is in a pass]
+            Dec[Decision.cs<br/>may they? + reason]
         end
         subgraph Ctrl[Controllers/]
             H[Health: GET /health]
@@ -70,12 +71,13 @@ flowchart TB
     end
     subgraph Tests[Warden.Tests - xUnit]
         F[WardenFactory.cs<br/>API in memory on warden_test]
-        TT[HealthTests, AuthTests, SigningKeyTests,<br/>DatabaseTests, TokenExchangeTests,<br/>SecurityGuaranteeTests]
+        TT[HealthTests, AuthTests, SigningKeyTests,<br/>DatabaseTests, TokenExchangeTests,<br/>DecisionTests, SecurityGuaranteeTests]
     end
     Api --> Core
     Tests --> Api
     Ctx --> Domain
-    T --> Perm
+    T --> Dec
+    Dec --> Perm
 ```
 
 | Python world | .NET world here |
@@ -336,6 +338,9 @@ flowchart TD
 | `jti` | pass number | same as the logbook row |
 | `exp` | +15 minutes | stops working by itself |
 
+Checks 2–7 are the shared decision function (next section); the controller only adds check 1
+and the stamping.
+
 **Real results** (dev server, as Sara):
 
 | Sara asks for | Answer |
@@ -384,7 +389,49 @@ flowchart LR
 
 ---
 
-## 8. Configuration and secrets
+## 8. The decision function (step 7)
+
+All "may they?" rules live in **one** place, `Auth/Decision.cs`, so the exchange and the tool
+gate can never disagree. Every answer is a `Verdict(Allowed, Reason)`; the reason goes into the
+audit log in step 8. The first "no" ends it.
+
+```mermaid
+flowchart TD
+    subgraph Decide["Decide - used by /token/exchange"]
+        A[agent registered?] --> E[engagement in the user's firm?] --> U[user in that firm?]
+        U --> W{ethical wall?} --> M{member?} --> R{role allows the scopes?}
+    end
+    subgraph DecideTool["DecideTool - used by the gate, step 9"]
+        T0{tool exists?} --> Decide
+        R --> P{tool policy:<br/>agents allowed?} --> S{pass carries<br/>the tool's scope?} --> OK[allowed]
+    end
+```
+
+**Tool policy** (`Warden.Core/Permissions.cs`)
+
+| Tool | Needs scope | Agents may call? |
+|---|---|---|
+| `list_documents` | documents.read | ✅ |
+| `read_document` | documents.read | ✅ |
+| `run_vouch` | vouch.run | ✅ |
+| `export_documents` | documents.export | ❌ humans only |
+
+Why `DecideTool` re-runs walls, membership and role instead of trusting the pass: a pass
+lives 15 minutes. If a wall goes up or a role changes in that time, the **current** data wins.
+
+| Ask | Verdict |
+|---|---|
+| Omar (Admin on Pepsi, walled) reads Pepsi | ❌ `ethical wall: Works on Coke 2026` |
+| Sara (Firm A) reads Acme (Firm B), Dana (Firm B) reads Coke | ❌ `engagement not found in your firm` |
+| Sara's pass (documents.read) → `read_document` on Coke | ✅ `allowed` |
+| same pass → `run_vouch` | ❌ `pass does not include vouch.run` |
+| Omar's agent → `export_documents` | ❌ `export_documents may not be called by an agent` |
+| a pass naming Pepsi, held for Sara | ❌ `ethical wall: ...` |
+| `delete_everything` | ❌ `unknown tool: delete_everything` |
+
+---
+
+## 9. Configuration and secrets
 
 ```mermaid
 flowchart LR
@@ -400,13 +447,13 @@ flowchart LR
 
 ---
 
-## 9. How it's tested
+## 10. How it's tested
 
 ```mermaid
 flowchart TB
     subgraph Collection["xUnit collection 'database' - one at a time, one shared app"]
         DBT[DatabaseTests<br/>direct DbContext,<br/>transaction rolled back]
-        TET[TokenExchangeTests<br/>PassCheckTests]
+        TET[TokenExchangeTests<br/>PassCheckTests<br/>DecisionTests]
         SGT[SecurityGuaranteeTests]
     end
     F[WardenFactory<br/>API in memory<br/>migrate + seed warden_test once] --> TET
@@ -433,11 +480,12 @@ flowchart TB
 | `SigningKeyTests` | JWKS public, no private fields; Warden-signed pass verifies, forged doesn't |
 | `TokenExchangeTests` | good pass; wall, other firm, unknown agent refused; bad scope 400 |
 | `PassCheckTests` | real pass OK; tampered, forged, sign-in token, unlogged, revoked refused |
-| `SecurityGuaranteeTests` | `agent_cannot_exceed_user_permissions` ✅, `expired_delegated_token_is_rejected` ✅ (others switch on in later steps) |
+| `DecisionTests` | tool calls: scope on the pass, agents can't export, walls beat the pass, unknown tool |
+| `SecurityGuaranteeTests` | `agent_cannot_exceed_user_permissions` ✅, `expired_delegated_token_is_rejected` ✅, `ethical_wall_blocks_even_admin` ✅, `tenant_a_cannot_read_tenant_b` ✅ (others switch on in later steps) |
 
 ---
 
-## 10. Handy commands
+## 11. Handy commands
 
 ```bash
 cd warden
@@ -454,14 +502,14 @@ docker compose exec postgres psql -U warden        # \dt, \d members, select ...
 
 ---
 
-## 11. What's next
+## 12. What's next
 
 ```mermaid
 flowchart LR
-    s7[7 decision function] --> s8[8 audit log] --> s9[9 tool gate] --> s10[10 tool policies] --> s11[11-12 Tickmark through Warden] --> s13[13 revoke + SCIM] --> s14[14 Entra ID] --> s15[15 write-up]
+    s8[8 audit log] --> s9[9 tool gate] --> s10[10 tool policies] --> s11[11-12 Tickmark through Warden] --> s13[13 revoke + SCIM] --> s14[14 Entra ID] --> s15[15 write-up]
 ```
 
 Known limits right now:
 - The agent only *says* who it is (`agent_id`); proper agent authentication comes later.
 - Refused attempts aren't recorded yet (audit log, step 8).
-- Nothing enforces walls or scopes on tool calls yet: there is no gate until step 9.
+- The decision function exists, but nothing calls `DecideTool` yet: there is no gate until step 9.

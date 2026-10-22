@@ -80,6 +80,14 @@ public class WardenFactory : WebApplicationFactory<Program>
             scope.ServiceProvider.GetRequiredService<WardenDbContext>());
     }
 
+    // Run something against the test database, e.g. warden.WithDb(db => Decision.Decide(db, ...)).
+    // Func<A, B> is C#'s type for "a function from A to B" (like Callable[[A], B] in Python).
+    public T WithDb<T>(Func<WardenDbContext, T> work)
+    {
+        using var scope = Services.CreateScope();
+        return work(scope.ServiceProvider.GetRequiredService<WardenDbContext>());
+    }
+
     // What an agent does: POST /token/exchange with the user's sign-in token.
     public Task<HttpResponseMessage> Exchange(Guid userId, Guid tenantId, Guid agentId, Guid engagementId, string scope)
     {

@@ -5,7 +5,9 @@
  * switches them on. If one of these ever fails, Warden has broken a promise.
  */
 using System.Net;
+using Warden.Api.Auth;
 using Warden.Api.Data;
+using Warden.Core;
 using Xunit;
 
 namespace Warden.Tests;
@@ -23,7 +25,16 @@ public class SecurityGuaranteeTests(WardenFactory warden)
         Assert.Contains("documents.export", await res.Content.ReadAsStringAsync());
     }
 
-    [Fact(Skip = "step 7")] public void ethical_wall_blocks_even_admin() { }
+    // Omar is an ADMIN member of Pepsi, but walled off from it. The wall wins.
+    [Fact]
+    public void ethical_wall_blocks_even_admin()
+    {
+        var verdict = warden.WithDb(db => Decision.Decide(db, DemoSeed.FirmA, DemoSeed.Omar, DemoSeed.Tickmark,
+            DemoSeed.Pepsi, new HashSet<string> { Permissions.DocumentsRead }));
+        Assert.False(verdict.Allowed);
+        Assert.StartsWith("ethical wall", verdict.Reason);
+    }
+
     [Fact(Skip = "step 13")] public void scim_deactivation_revokes_agent_tokens() { }
     // A real Warden pass, in the logbook, not revoked, but expired a minute ago: refused.
     [Fact]
@@ -38,5 +49,15 @@ public class SecurityGuaranteeTests(WardenFactory warden)
     [Fact(Skip = "later: credits")] public void concurrent_requests_cannot_overspend_credits() { }
     [Fact(Skip = "step 10")] public void prompt_injection_cannot_trigger_export() { }
     [Fact(Skip = "later: human approval")] public void override_requires_human_approval() { }
-    [Fact(Skip = "step 7")] public void tenant_a_cannot_read_tenant_b() { }
+    // Firm A's Sara can't reach Firm B's Acme, and Firm B's Dana can't reach Firm A's Coke.
+    // Both get "not found", so a firm can't even learn that another firm's engagement exists.
+    [Fact]
+    public void tenant_a_cannot_read_tenant_b()
+    {
+        var read = new HashSet<string> { Permissions.DocumentsRead };
+        var saraToAcme = warden.WithDb(db => Decision.Decide(db, DemoSeed.FirmA, DemoSeed.Sara, DemoSeed.Tickmark, DemoSeed.Acme, read));
+        var danaToCoke = warden.WithDb(db => Decision.Decide(db, DemoSeed.FirmB, DemoSeed.Dana, DemoSeed.Tickmark, DemoSeed.Coke, read));
+        Assert.Equal(new Decision.Verdict(false, "engagement not found in your firm"), saraToAcme);
+        Assert.Equal(new Decision.Verdict(false, "engagement not found in your firm"), danaToCoke);
+    }
 }

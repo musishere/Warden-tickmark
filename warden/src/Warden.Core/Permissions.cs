@@ -11,7 +11,7 @@
  *   "documents.read vouch.run"
  *
  * Plain C# with no database or web code, so it's trivial to test and reuse
- * (the decision function in step 7 uses it too).
+ * (the decision function, Decision.cs, uses it too).
  */
 using Warden.Core.Domain;
 
@@ -31,6 +31,19 @@ public static class Permissions
         Role.Staff => new HashSet<string> { DocumentsRead, VouchRun },
         Role.Manager or Role.Admin => new HashSet<string> { DocumentsRead, VouchRun, DocumentsExport },
         _ => new HashSet<string>(),  // unknown role: nothing (fail closed)
+    };
+
+    // Tool policy: which scope each tool needs, and whether an agent may call it at all.
+    // export_documents is humans only: even if a prompt injection tells the agent to
+    // export everything, Warden says no (step 10 builds the tools themselves).
+    public record ToolRule(string Scope, bool AgentsAllowed);
+
+    public static readonly IReadOnlyDictionary<string, ToolRule> Tools = new Dictionary<string, ToolRule>
+    {
+        ["list_documents"] = new(DocumentsRead, AgentsAllowed: true),
+        ["read_document"] = new(DocumentsRead, AgentsAllowed: true),
+        ["run_vouch"] = new(VouchRun, AgentsAllowed: true),
+        ["export_documents"] = new(DocumentsExport, AgentsAllowed: false),
     };
 
     // "documents.read  vouch.run" -> { "documents.read", "vouch.run" }

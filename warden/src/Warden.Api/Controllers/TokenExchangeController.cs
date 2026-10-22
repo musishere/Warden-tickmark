@@ -24,7 +24,8 @@
  * own secret yet. The pass is still bound to Sara's verified token and Sara's rights.
  * ponytail: agent authentication (client secret/certificate) when agents run outside our control.
  *
- * Checks 2-7 move into the shared decision function in step 7.
+ * Checks 2-7 live in the shared decision function (Auth/Decision.cs), so the tool gate
+ * (step 9) applies exactly the same rules.
  */
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Mvc;
@@ -58,35 +59,10 @@ public class TokenExchangeController(WardenDbContext db, WardenSigningKey signin
         if (asked.Count == 0 || unknown.Count > 0)
             return BadRequest(new { error = "invalid_scope", reason = $"unknown or empty scope: {string.Join(' ', unknown)}" });
 
-        // 2. the agent is registered.
-        if (db.Agents.Find(req.AgentId) is null)
-            return Deny("unknown agent");
-
-        // 3. the engagement exists in the caller's own firm. Another firm's engagement
-        //    gets the same answer as a missing one, so nothing leaks about other firms.
-        var engagement = db.Engagements.Find(req.Resource);
-        if (engagement is null || engagement.TenantId != tenantId)
-            return Deny("engagement not found in your firm");
-
-        // 4. the user in the token really exists in that firm.
-        var user = db.Users.Find(userId);
-        if (user is null || user.TenantId != tenantId)
-            return Deny("unknown user");
-
-        // 5. ethical walls first: they beat membership and every role.
-        var wall = db.EthicalWalls.Find(req.Resource, userId);
-        if (wall is not null)
-            return Deny($"ethical wall: {wall.Reason}");
-
-        // 6. the user must be on the engagement.
-        var member = db.Members.Find(req.Resource, userId);
-        if (member is null)
-            return Deny("not a member of this engagement");
-
-        // 7. the agent can't get more than the user has.
-        var notAllowed = asked.Except(Permissions.ScopesFor(member.Role)).ToList();
-        if (notAllowed.Count > 0)
-            return Deny($"{member.Role} may not grant: {string.Join(' ', notAllowed)}");
+        // 2-7. agent, firm, user, walls, membership, role: the shared decision function.
+        var verdict = Decision.Decide(db, tenantId, userId, req.AgentId, req.Resource, asked);
+        if (!verdict.Allowed)
+            return Deny(verdict.Reason);
 
         // All checks passed: log the pass in the logbook, then stamp it.
         var now = DateTime.UtcNow;
