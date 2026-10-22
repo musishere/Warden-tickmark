@@ -9,6 +9,11 @@
  *
  * `dotnet ef migrations add <Name>` reads this file and generates SQL in
  * Data/Migrations/. `dotnet ef database update` runs that SQL against Postgres.
+ * In Data/Migrations/:
+ *   <date>_<Name>.cs           — one per schema change, applied in date order (like Alembic revisions)
+ *   <date>_<Name>.Designer.cs  — generated metadata for that migration
+ *   WardenDbContextModelSnapshot.cs — EF's copy of the current schema; it diffs your
+ *     classes against this to build the next migration. Rewritten every time, never edit.
  *
  * Foreign keys use Restrict, not cascade: deleting a tenant that still has users
  * fails instead of silently deleting them. An audit system must not lose rows by accident.
@@ -27,6 +32,7 @@ public class WardenDbContext(DbContextOptions<WardenDbContext> options) : DbCont
     public DbSet<Agent> Agents => Set<Agent>();
     public DbSet<Engagement> Engagements => Set<Engagement>();
     public DbSet<Member> Members => Set<Member>();
+    public DbSet<EthicalWall> EthicalWalls => Set<EthicalWall>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -44,5 +50,10 @@ public class WardenDbContext(DbContextOptions<WardenDbContext> options) : DbCont
 
         // Store the role as text ("Staff") instead of a number (0), so the DB is readable.
         b.Entity<Member>().Property(m => m.Role).HasConversion<string>();
+
+        // ethical_walls: one block per (engagement, user), both must exist.
+        b.Entity<EthicalWall>().HasKey(w => new { w.EngagementId, w.UserId });
+        b.Entity<EthicalWall>().HasOne<Engagement>().WithMany().HasForeignKey(w => w.EngagementId).OnDelete(DeleteBehavior.Restrict);
+        b.Entity<EthicalWall>().HasOne<User>().WithMany().HasForeignKey(w => w.UserId).OnDelete(DeleteBehavior.Restrict);
     }
 }

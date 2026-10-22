@@ -52,4 +52,39 @@ public class DatabaseTests
         Assert.Equal(coke.Id, member.EngagementId);
         Assert.Equal(Role.Staff, member.Role);
     }
+
+    [Fact]
+    public void ethical_wall_round_trips_through_postgres()
+    {
+        using var db = NewDb();
+        using var tx = db.Database.BeginTransaction();
+
+        var firm = new Tenant { Name = "Firm A" };
+        var sara = new User { TenantId = firm.Id, Email = "sara@firma.test", Name = "Sara" };
+        var pepsi = new Engagement { TenantId = firm.Id, Name = "Pepsi 2026" };
+        db.AddRange(firm, sara, pepsi, new EthicalWall { EngagementId = pepsi.Id, UserId = sara.Id, Reason = "Works on Coke 2026" });
+        db.SaveChanges();
+        db.ChangeTracker.Clear();
+
+        var wall = db.EthicalWalls.Single(w => w.UserId == sara.Id);
+        Assert.Equal(pepsi.Id, wall.EngagementId);
+        Assert.Equal("Works on Coke 2026", wall.Reason);
+    }
+
+    [Fact]
+    public void demo_seed_builds_the_demo_world_once()
+    {
+        using var db = NewDb();
+        using var tx = db.Database.BeginTransaction();
+
+        DemoSeed.Run(db);
+        DemoSeed.Run(db);  // second run must do nothing (no duplicate-key crash)
+        db.ChangeTracker.Clear();
+
+        Assert.Equal(2, db.Tenants.Count());
+        Assert.Equal(5, db.Users.Count());
+        // Omar is an Admin on Pepsi AND walled from it: the case step 7 must deny.
+        Assert.Equal(Role.Admin, db.Members.Single(m => m.UserId == DemoSeed.Omar && m.EngagementId == DemoSeed.Pepsi).Role);
+        Assert.True(db.EthicalWalls.Any(w => w.UserId == DemoSeed.Omar && w.EngagementId == DemoSeed.Pepsi));
+    }
 }

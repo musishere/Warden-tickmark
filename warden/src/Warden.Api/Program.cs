@@ -25,6 +25,17 @@ builder.Services.AddDbContext<WardenDbContext>(o => o
     .UseSnakeCaseNamingConvention());
 
 var app = builder.Build();
+
+// `dotnet run -- seed`: insert the demo data (Data/DemoSeed.cs), then exit instead of serving.
+// CreateScope gives a short-lived set of services, like opening and closing a DB session.
+if (args.Contains("seed"))
+{
+    using var scope = app.Services.CreateScope();
+    DemoSeed.Run(scope.ServiceProvider.GetRequiredService<WardenDbContext>());
+    Console.WriteLine("Demo data ready (skipped anything already there).");
+    return;
+}
+
 app.MapControllers();
 app.Run();
 

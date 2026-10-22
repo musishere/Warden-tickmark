@@ -21,7 +21,7 @@ Each step is small: a few files, one test that proves it, and a commit.
 
 ### Phase 1 — The data
 - [x] 2. Tenants, users, agents, engagements, members (roles); first migration
-- [ ] 3. Ethical walls + demo seed (Firm A: Coke, Pepsi with a wall; Firm B: Acme; Sara, Ali, admin; Tickmark agent)
+- [x] 3. Ethical walls + demo seed (Firm A: Coke, Pepsi with a wall; Firm B: Acme; Sara, Ali, admin; Tickmark agent)
 
 ### Phase 2 — Identity
 - [ ] 4. Validate the user's sign-in token; tenant from the verified token only
