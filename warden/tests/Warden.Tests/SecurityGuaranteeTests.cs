@@ -1,3 +1,10 @@
+/*
+ * SecurityGuaranteeTests.cs — the security promises Warden makes, one test each.
+ *
+ * Each test name is a guarantee in plain English. They are all skipped for now
+ * ([Fact(Skip = ...)]) and get switched on as the matching step in MVP.md lands.
+ * If one of these ever fails, Warden has broken a promise.
+ */
 using Xunit;
 
 namespace Warden.Tests;

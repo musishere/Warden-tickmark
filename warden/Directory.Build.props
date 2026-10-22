@@ -1,3 +1,10 @@
+<!--
+  Directory.Build.props: settings applied automatically to EVERY project under this folder.
+    TargetFramework net10.0:  build for .NET 10.
+    Nullable enable:          the compiler warns if something might be null (prevents NullReferenceException).
+    ImplicitUsings enable:    common namespaces (System, System.Linq, ...) are imported for you.
+    TreatWarningsAsErrors:    any warning fails the build, so problems can't pile up.
+-->
 <Project>
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
