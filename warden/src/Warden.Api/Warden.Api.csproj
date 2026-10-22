@@ -5,12 +5,21 @@
     PackageReference: NuGet packages (like pip packages):
       JwtBearer: validates JWT tokens on incoming requests.
       EntityFrameworkCore + Npgsql: the ORM (like SQLAlchemy) and its Postgres driver.
+      EntityFrameworkCore.Design: needed by the `dotnet ef` migration tool (dev only, not shipped).
+      EFCore.NamingConventions: names tables/columns in snake_case (users.tenant_id), the Postgres norm.
 -->
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <ItemGroup>
+    <PackageReference Include="EFCore.NamingConventions" Version="10.0.1" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.13">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
     <ProjectReference Include="..\Warden.Core\Warden.Core.csproj" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.0" />
-    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.13" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+    <!-- Pinned so every EF Core piece is the same version (the Postgres driver alone would pull an older one). -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.13" />
   </ItemGroup>
 </Project>
