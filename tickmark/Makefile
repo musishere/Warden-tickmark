@@ -9,7 +9,7 @@ help:
 	@echo "make db       start Postgres (docker) and apply migrations"
 	@echo "make run      start backend + frontend on http://localhost:$(PORT) (auto-reload)"
 	@echo "make certs    once: trusted https certificate for the Excel add-in"
-	@echo "make run-https  backend over https for the Excel add-in (addin/README.md)"
+	@echo "make run-https  backend over https for the Excel add-in (docs/how-it-works.md, section 15)"
 	@echo "make logs     follow the step-by-step log"
 	@echo "make demo     generate the easy and tough test cases in data/demo/"
 	@echo "make warden-demo  files for Warden's demo engagements (Coke, Pepsi) behind the tools"

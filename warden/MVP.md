@@ -44,11 +44,33 @@ Each step is small: a few files, one test that proves it, and a commit.
 - [x] 13. Revoke by `jti` + `PATCH /scim/v2/Users/{id}` revokes all agent passes; running work stops — `scim_deactivation_revokes_agent_tokens`
 
 ### Phase 7 — Real Entra ID
-- [ ] 14. Entra test tenant app registration; accept Entra tokens (`tid`, `oid`) — code + fake-Entra tests done; the real app registration is a manual step: [docs/entra.md](docs/entra.md)
+- [ ] 14. Entra test tenant app registration; accept Entra tokens (`tid`, `oid`) — code + fake-Entra tests done; the real app registration is a manual step: [docs/how-it-works.md §22](docs/how-it-works.md#22-real-microsoft-entra-id-setup)
 
 ### Phase 8 — Write it up
 - [x] 15. RFC, threat model, README (problem → architecture → trade-offs)
 
+### Phase 9 — Any agent, no code changes (Warden as an MCP gateway)
+Goal: a client's agent, built with anything, is pointed at Warden by changing one setting (its MCP
+tool server address). No Warden code inside the agent. And it can't go around Warden.
+
+- [ ] 16. `/mcp/engagements/{id}`: Warden speaks MCP (JSON-RPC over Streamable HTTP): `initialize`,
+  `tools/list` (only the tools this user + agent may use; export never listed), `tools/call` →
+  the existing gate (pass check → decision → audit log → forward). One URL per engagement, so
+  "which client" is part of the address — `mcp_call_is_checked_and_logged_like_any_tool_call`
+- [ ] 17. MCP sign-in, the standard way: `/.well-known/oauth-protected-resource` (RFC 9728) pointing
+  at Entra; 401 + `WWW-Authenticate` when no token; Warden turns the Entra token into a pass
+  itself, per session — `mcp_client_without_sign_in_gets_401_with_where_to_sign_in`
+- [ ] 18. Per-agent ceiling: each registered agent gets `allowed_scopes`; a pass is
+  agent ceiling ∩ user's rights ∩ what was asked — `agent_cannot_exceed_its_registration`
+- [ ] 19. Proof with a stock client: MCP Inspector (or Claude Desktop) pointed at Warden, no Warden
+  code: Coke works, Pepsi refused, export not offered, all in the audit log. Tickmark drops
+  `warden_client.py` and uses a plain MCP client
+- [ ] 20. The lock: agents hold no keys and can only reach Warden (Azure Container Apps network
+  rules); Warden holds the keys to the real systems — `agent_container_cannot_reach_tools_directly`
+- [ ] 21. Write-up in docs/how-it-works.md: "integrating any agent without code changes", how Warden compares with
+  existing MCP gateways and Entra Agent ID
+
 ## Later
 Credits (reserve → settle, concurrency test), human approval (`override_requires_human_approval`),
-Excel add-in sign-in, MCP-compatible proxy, Azure Container Apps deploy, dashboard.
+Excel add-in sign-in, short-lived storage links (Azure Blob SAS) for large files, a proxy mode
+for agents that don't speak MCP, dashboard.

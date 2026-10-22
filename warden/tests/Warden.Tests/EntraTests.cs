@@ -7,7 +7,7 @@
  *   token for another app (audience)     -> 401
  *   token from another Entra tenant      -> 401
  *   token signed by someone else's key   -> 401
- * The real Entra check (Microsoft's keys, a real app registration) is done by hand: docs/entra.md.
+ * The real Entra check (Microsoft's keys, a real app registration) is done by hand: docs/how-it-works.md, section 22.
  */
 using System.Net;
 using System.Net.Http.Headers;
