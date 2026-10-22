@@ -666,7 +666,7 @@ dotnet test                                        # all tests
 dotnet ef database update -p src/Warden.Api        # apply migrations to dev DB
 dotnet ef migrations list -p src/Warden.Api
 dotnet run --project src/Warden.Api -- seed        # demo data
-dotnet run --project src/Warden.Api -- dev-token sara
+dotnet run --project src/Warden.Api --no-launch-profile -- dev-token sara   # just the token
 dotnet run --project src/Warden.Api -- link-entra sara <tid> <oid>
 dotnet run --project src/Warden.Api --urls http://localhost:5000
 cd ../tickmark && make warden-demo && make run      # Tickmark's tools on :8000

@@ -55,7 +55,7 @@ docker compose up -d                                     # Postgres on :5433
 dotnet ef database update -p src/Warden.Api              # tables
 dotnet run --project src/Warden.Api -- seed              # demo world: Firm A (Coke, Pepsi + wall), Firm B
 dotnet test                                              # 50 tests
-dotnet run --project src/Warden.Api --urls http://localhost:5000
+dotnet run --project src/Warden.Api                  # :5000, Development (Properties/launchSettings.json)
 ```
 
 The whole flow, with Tickmark (second terminal):
@@ -63,7 +63,7 @@ The whole flow, with Tickmark (second terminal):
 ```bash
 cd tickmark && make setup && make warden-demo            # demo invoices for Coke and Pepsi
 make run                                                 # Tickmark's tools on :8000 (behind Warden)
-SARA=$(cd ../warden && dotnet run --project src/Warden.Api -- dev-token sara)   # third terminal
+SARA=$(cd ../warden && dotnet run --project src/Warden.Api --no-launch-profile -- dev-token sara)   # third terminal
 make agent TOKEN=$SARA                                   # Coke: ✅ ✅ ✅ ✅ ⚠️ ❓
 make agent TOKEN=$SARA ENG=e0000000-0000-0000-0000-000000000002   # Pepsi: "ethical wall", stops
 ```
