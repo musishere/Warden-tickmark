@@ -3,6 +3,9 @@
  *
  * Agents always act on behalf of a user, and can never do more than that user.
  * TenantId says which firm the user belongs to (a foreign key to Tenant.Id).
+ *
+ * Active = false when the firm's identity provider says they've left (SCIM, step 13):
+ * Warden then refuses everything for them, and their agents' passes are revoked.
  */
 namespace Warden.Core.Domain;
 
@@ -12,4 +15,5 @@ public class User
     public Guid TenantId { get; set; }
     public required string Email { get; set; }
     public required string Name { get; set; }
+    public bool Active { get; set; } = true;
 }

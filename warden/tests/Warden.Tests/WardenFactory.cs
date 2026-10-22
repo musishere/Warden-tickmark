@@ -43,10 +43,12 @@ public class WardenFactory : WebApplicationFactory<Program>
     public const string TestDb = "Host=localhost;Port=5433;Database=warden_test;Username=warden;Password=warden";
 
     public FakeTools Tools { get; } = new();
+    public const string ScimSecret = "firm-a-scim-secret-for-tests";
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseSetting("ConnectionStrings:Warden", TestDb);
+        builder.UseSetting($"Scim:Tenants:{DemoSeed.FirmA}", ScimSecret);  // Firm A's identity provider
         // The "tools" HttpClient sends to FakeTools instead of the network.
         builder.ConfigureTestServices(s => s.AddHttpClient("tools").ConfigurePrimaryHttpMessageHandler(() => Tools));
     }
@@ -123,6 +125,29 @@ public class WardenFactory : WebApplicationFactory<Program>
         if (pass is not null)
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", pass);
         return client.PostAsJsonAsync($"/tools/{tool}/invoke", args ?? new { });
+    }
+
+    // A new active Staff member of Coke at Firm A, made for one test (so deactivating them
+    // can't break other tests that use the demo people).
+    public Guid NewCokeStaff() => WithDb(db =>
+    {
+        var u = new User { TenantId = DemoSeed.FirmA, Email = $"{Guid.NewGuid()}@firma.test", Name = "Leaver" };
+        db.Users.Add(u);
+        db.Members.Add(new Member { EngagementId = DemoSeed.Coke, UserId = u.Id, Role = Role.Staff });
+        db.SaveChanges();
+        return u.Id;
+    });
+
+    // What Entra does when someone leaves: SCIM PATCH active=false (as a string, like Entra).
+    public Task<HttpResponseMessage> ScimDeactivate(Guid userId, string secret = ScimSecret)
+    {
+        var client = CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", secret);
+        return client.PatchAsJsonAsync($"/scim/v2/Users/{userId}", new
+        {
+            schemas = new[] { "urn:ietf:params:scim:api:messages:2.0:PatchOp" },
+            Operations = new[] { new { op = "Replace", path = "active", value = "False" } },
+        });
     }
 
     // What an agent does: POST /token/exchange with the user's sign-in token.

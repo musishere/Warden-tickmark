@@ -256,6 +256,10 @@ namespace Warden.Api.Data.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<bool>("Active")
+                        .HasColumnType("boolean")
+                        .HasColumnName("active");
+
                     b.Property<string>("Email")
                         .IsRequired()
                         .HasColumnType("text")

@@ -11,7 +11,7 @@
  *                    Also by GET /audit with no agent (agentId null): Sara herself asking.
  *     1. the agent is registered (skipped when there is no agent)
  *     2. the engagement exists IN THE USER'S FIRM (another firm's looks the same as missing)
- *     3. the user really exists in that firm
+ *     3. the user really exists in that firm, and is still active (not deactivated by SCIM)
  *     4. walls:      no ethical wall between user and engagement (beats every role, even Admin)
  *     5. membership: the user is on the engagement
  *     6. role:       the user's role allows every scope asked for (agent can't exceed its user)
@@ -55,6 +55,8 @@ public static class Decision
         var user = db.Users.Find(userId);
         if (user is null || user.TenantId != tenantId)
             return Deny("unknown user");
+        if (!user.Active)
+            return Deny("user deactivated");
 
         // 4. walls first: they beat membership and every role.
         var wall = db.EthicalWalls.Find(engagementId, userId);

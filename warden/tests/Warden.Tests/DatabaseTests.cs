@@ -107,7 +107,9 @@ public class DatabaseTests
         db.ChangeTracker.Clear();
 
         Assert.Equal(2, db.Tenants.Count());
-        Assert.Equal(5, db.Users.Count());
+        // Count the demo people by id: other tests add their own users (e.g. SCIM leavers).
+        Guid[] demo = [DemoSeed.Sara, DemoSeed.Ali, DemoSeed.Omar, DemoSeed.Bilal, DemoSeed.Dana];
+        Assert.Equal(5, db.Users.Count(u => demo.Contains(u.Id)));
         // Omar is an Admin on Pepsi AND walled from it: the case step 7 must deny.
         Assert.Equal(Role.Admin, db.Members.Single(m => m.UserId == DemoSeed.Omar && m.EngagementId == DemoSeed.Pepsi).Role);
         Assert.True(db.EthicalWalls.Any(w => w.UserId == DemoSeed.Omar && w.EngagementId == DemoSeed.Pepsi));

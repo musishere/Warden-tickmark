@@ -41,7 +41,7 @@ Each step is small: a few files, one test that proves it, and a commit.
 - [x] 12. Tickmark vouches via `WardenClient`: Coke allowed, Pepsi denied, both logged
 
 ### Phase 6 — The off switch
-- [ ] 13. Revoke by `jti` + `PATCH /scim/v2/Users/{id}` revokes all agent passes; running work stops — `scim_deactivation_revokes_agent_tokens`
+- [x] 13. Revoke by `jti` + `PATCH /scim/v2/Users/{id}` revokes all agent passes; running work stops — `scim_deactivation_revokes_agent_tokens`
 
 ### Phase 7 — Real Entra ID
 - [ ] 14. Entra test tenant app registration; accept Entra tokens (`tid`, `oid`)

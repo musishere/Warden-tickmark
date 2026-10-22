@@ -35,7 +35,25 @@ public class SecurityGuaranteeTests(WardenFactory warden)
         Assert.StartsWith("ethical wall", verdict.Reason);
     }
 
-    [Fact(Skip = "step 13")] public void scim_deactivation_revokes_agent_tokens() { }
+    // Someone leaves the firm while their agent is mid-job. Entra's SCIM call must stop the agent
+    // at its very next tool call, and no new pass can be had.
+    [Fact]
+    public async Task scim_deactivation_revokes_agent_tokens()
+    {
+        warden.Tools.Reset();
+        var leaver = warden.NewCokeStaff();
+        var pass = await warden.Pass(leaver, DemoSeed.FirmA, DemoSeed.Coke, "documents.read");
+        Assert.Equal(HttpStatusCode.OK, (await warden.Invoke(pass, "list_documents")).StatusCode);  // working
+
+        Assert.Equal(HttpStatusCode.OK, (await warden.ScimDeactivate(leaver)).StatusCode);
+
+        var next = await warden.Invoke(pass, "read_document", new { name = "inv1.pdf" });
+        Assert.Equal(HttpStatusCode.Unauthorized, next.StatusCode);
+        Assert.Contains("pass revoked", await next.Content.ReadAsStringAsync());
+        var again = await warden.Exchange(leaver, DemoSeed.FirmA, DemoSeed.Tickmark, DemoSeed.Coke, "documents.read");
+        Assert.Equal(HttpStatusCode.Forbidden, again.StatusCode);
+        Assert.Contains("user deactivated", await again.Content.ReadAsStringAsync());
+    }
     // A real Warden pass, in the logbook, not revoked, but expired a minute ago: refused.
     [Fact]
     public async Task expired_delegated_token_is_rejected()
