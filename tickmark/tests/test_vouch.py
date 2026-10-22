@@ -146,6 +146,12 @@ def test_a_side_check_that_cannot_run_is_a_note_not_a_review():
     assert unsettled.verdict == "needs_review"  # a possible double payment still needs a look
 
 
+def test_item_lines_asked_for_but_unread_are_never_matched():
+    unread = verdict(row(), [pdf(lines=())])  # Y2025 turns item lines on
+    assert unread.verdict == "needs_review" and any("lines_sum not checkable" in r for r in unread.reasons)
+    assert verdict(row(), [pdf(lines=())], VouchPolicy(**{**Y2025.__dict__, "line_items": False})).verdict == "matched"
+
+
 def test_difference_wins_over_unverifiable():
     assert verdict(row(amount=Decimal(1)), [pdf()], VouchPolicy()).verdict == "difference"
 
