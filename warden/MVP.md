@@ -25,7 +25,7 @@ Each step is small: a few files, one test that proves it, and a commit.
 
 ### Phase 2 — Identity
 - [x] 4. Validate the user's sign-in token; tenant from the verified token only
-- [ ] 5. Warden's signing key + JWKS endpoint
+- [x] 5. Warden's signing key + JWKS endpoint
 - [ ] 6. `POST /token/exchange` (stored by `jti`) — `agent_cannot_exceed_user_permissions`, `expired_delegated_token_is_rejected`
 
 ### Phase 3 — The rules

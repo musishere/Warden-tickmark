@@ -7,7 +7,8 @@
  *      like FastAPI's Depends). AddControllers = "find every Controller class",
  *      AddDbContext = "give out database sessions",
  *      AddAuthentication = "read and verify the sign-in token on each request",
- *      AddAuthorization  = "decide if that caller may use the endpoint".
+ *      AddAuthorization  = "decide if that caller may use the endpoint",
+ *      AddSingleton<WardenSigningKey> = "one shared key pair for signing agent passes".
  *   3. Build, then the middleware pipeline: each request passes through
  *      UseAuthentication -> UseAuthorization -> the controller, in that order.
  *   4. Run: starts the HTTP server and blocks until it stops.
@@ -50,6 +51,10 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJw
     if (builder.Environment.IsDevelopment())
         o.TokenValidationParameters.IssuerSigningKey = DevIssuer.SigningKey(builder.Configuration);
 });
+
+// Warden's own key pair for signing agent passes (Auth/WardenSigningKey.cs).
+// Singleton = one instance for the whole app, so every pass is signed with the same key.
+builder.Services.AddSingleton<WardenSigningKey>();
 
 // Locked by default: every endpoint requires a verified token that says who (oid) and
 // which firm (tid). An endpoint is public only if it says [AllowAnonymous] (like /health).
