@@ -40,6 +40,64 @@ namespace Warden.Api.Data.Migrations
                     b.ToTable("agents", (string)null);
                 });
 
+            modelBuilder.Entity("Warden.Core.Domain.DelegatedToken", b =>
+                {
+                    b.Property<Guid>("Jti")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("jti");
+
+                    b.Property<Guid>("AgentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("agent_id");
+
+                    b.Property<Guid>("EngagementId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("engagement_id");
+
+                    b.Property<DateTime>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at");
+
+                    b.Property<DateTime>("IssuedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("issued_at");
+
+                    b.Property<DateTime?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("revoked_at");
+
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("scope");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Jti")
+                        .HasName("pk_delegated_tokens");
+
+                    b.HasIndex("AgentId")
+                        .HasDatabaseName("ix_delegated_tokens_agent_id");
+
+                    b.HasIndex("EngagementId")
+                        .HasDatabaseName("ix_delegated_tokens_engagement_id");
+
+                    b.HasIndex("TenantId")
+                        .HasDatabaseName("ix_delegated_tokens_tenant_id");
+
+                    b.HasIndex("UserId")
+                        .HasDatabaseName("ix_delegated_tokens_user_id");
+
+                    b.ToTable("delegated_tokens", (string)null);
+                });
+
             modelBuilder.Entity("Warden.Core.Domain.Engagement", b =>
                 {
                     b.Property<Guid>("Id")
@@ -160,6 +218,37 @@ namespace Warden.Api.Data.Migrations
                         .HasDatabaseName("ix_users_tenant_id_email");
 
                     b.ToTable("users", (string)null);
+                });
+
+            modelBuilder.Entity("Warden.Core.Domain.DelegatedToken", b =>
+                {
+                    b.HasOne("Warden.Core.Domain.Agent", null)
+                        .WithMany()
+                        .HasForeignKey("AgentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_delegated_tokens_agents_agent_id");
+
+                    b.HasOne("Warden.Core.Domain.Engagement", null)
+                        .WithMany()
+                        .HasForeignKey("EngagementId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_delegated_tokens_engagements_engagement_id");
+
+                    b.HasOne("Warden.Core.Domain.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_delegated_tokens_tenants_tenant_id");
+
+                    b.HasOne("Warden.Core.Domain.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_delegated_tokens_users_user_id");
                 });
 
             modelBuilder.Entity("Warden.Core.Domain.Engagement", b =>

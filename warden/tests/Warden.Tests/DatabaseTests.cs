@@ -16,15 +16,14 @@ using Xunit;
 
 namespace Warden.Tests;
 
+[Collection(WardenFactory.Db)]
 public class DatabaseTests
 {
-    const string TestDb = "Host=localhost;Port=5433;Database=warden_test;Username=warden;Password=warden";
-
     static WardenDbContext NewDb()
     {
         // Same settings as Program.cs, but pointed at the test database.
         var options = new DbContextOptionsBuilder<WardenDbContext>()
-            .UseNpgsql(TestDb)
+            .UseNpgsql(WardenFactory.TestDb)
             .UseSnakeCaseNamingConvention()
             .Options;
         var db = new WardenDbContext(options);
@@ -69,6 +68,32 @@ public class DatabaseTests
         var wall = db.EthicalWalls.Single(w => w.UserId == sara.Id);
         Assert.Equal(pepsi.Id, wall.EngagementId);
         Assert.Equal("Works on Coke 2026", wall.Reason);
+    }
+
+    [Fact]
+    public void delegated_token_round_trips_through_postgres()
+    {
+        using var db = NewDb();
+        using var tx = db.Database.BeginTransaction();
+        DemoSeed.Run(db);  // reuse the demo world: Sara, Coke, Tickmark
+
+        var issued = DateTime.UtcNow;
+        var pass = new DelegatedToken
+        {
+            TenantId = DemoSeed.FirmA, UserId = DemoSeed.Sara, AgentId = DemoSeed.Tickmark,
+            EngagementId = DemoSeed.Coke, Scope = "documents.read vouch.run",
+            IssuedAt = issued, ExpiresAt = issued.AddMinutes(15),
+        };
+        db.DelegatedTokens.Add(pass);
+        db.SaveChanges();
+        db.ChangeTracker.Clear();
+
+        var saved = db.DelegatedTokens.Single(t => t.Jti == pass.Jti);
+        Assert.Equal(DemoSeed.Tickmark, saved.AgentId);
+        Assert.Equal("documents.read vouch.run", saved.Scope);
+        Assert.Null(saved.RevokedAt);  // a new pass is not revoked
+        // Postgres stores microseconds, .NET ticks are finer: compare to the millisecond.
+        Assert.Equal(issued.AddMinutes(15), saved.ExpiresAt, TimeSpan.FromMilliseconds(1));
     }
 
     [Fact]

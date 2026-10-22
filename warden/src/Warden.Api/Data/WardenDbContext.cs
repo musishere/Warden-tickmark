@@ -33,6 +33,7 @@ public class WardenDbContext(DbContextOptions<WardenDbContext> options) : DbCont
     public DbSet<Engagement> Engagements => Set<Engagement>();
     public DbSet<Member> Members => Set<Member>();
     public DbSet<EthicalWall> EthicalWalls => Set<EthicalWall>();
+    public DbSet<DelegatedToken> DelegatedTokens => Set<DelegatedToken>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -55,5 +56,13 @@ public class WardenDbContext(DbContextOptions<WardenDbContext> options) : DbCont
         b.Entity<EthicalWall>().HasKey(w => new { w.EngagementId, w.UserId });
         b.Entity<EthicalWall>().HasOne<Engagement>().WithMany().HasForeignKey(w => w.EngagementId).OnDelete(DeleteBehavior.Restrict);
         b.Entity<EthicalWall>().HasOne<User>().WithMany().HasForeignKey(w => w.UserId).OnDelete(DeleteBehavior.Restrict);
+
+        // delegated_tokens: the pass ledger, keyed by jti. User, agent and engagement must exist.
+        // The index on user_id makes "revoke all of this user's passes" (step 13) fast.
+        b.Entity<DelegatedToken>().HasKey(t => t.Jti);
+        b.Entity<DelegatedToken>().HasOne<Tenant>().WithMany().HasForeignKey(t => t.TenantId).OnDelete(DeleteBehavior.Restrict);
+        b.Entity<DelegatedToken>().HasOne<User>().WithMany().HasForeignKey(t => t.UserId).OnDelete(DeleteBehavior.Restrict);
+        b.Entity<DelegatedToken>().HasOne<Agent>().WithMany().HasForeignKey(t => t.AgentId).OnDelete(DeleteBehavior.Restrict);
+        b.Entity<DelegatedToken>().HasOne<Engagement>().WithMany().HasForeignKey(t => t.EngagementId).OnDelete(DeleteBehavior.Restrict);
     }
 }
