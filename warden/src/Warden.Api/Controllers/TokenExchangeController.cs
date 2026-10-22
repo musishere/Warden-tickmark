@@ -14,6 +14,7 @@
  *   5. no ethical wall between Sara and the engagement (walls beat everything)
  *   6. Sara is a member of the engagement
  *   7. every scope asked for is allowed for Sara's role -> an agent can't exceed its user
+ * Every decision (allowed or denied) is written to the audit log (step 8).
  * Then: write a row in the logbook (delegated_tokens), stamp the pass, return it.
  *
  * Response (200):
@@ -61,19 +62,35 @@ public class TokenExchangeController(WardenDbContext db, WardenSigningKey signin
 
         // 2-7. agent, firm, user, walls, membership, role: the shared decision function.
         var verdict = Decision.Decide(db, tenantId, userId, req.AgentId, req.Resource, asked);
+
+        // Every decision goes in the audit log, allowed or not.
+        var now = DateTime.UtcNow;
+        var scope = string.Join(' ', asked.Order());
+        var audit = new AuditEntry
+        {
+            At = now, TenantId = tenantId, UserId = userId, AgentId = req.AgentId, EngagementId = req.Resource,
+            Action = "token.exchange", Scope = scope, Allowed = verdict.Allowed, Reason = verdict.Reason,
+        };
+        db.AuditLog.Add(audit);
+
         if (!verdict.Allowed)
+        {
+            db.SaveChanges();
             return Deny(verdict.Reason);
+        }
 
         // All checks passed: log the pass in the logbook, then stamp it.
-        var now = DateTime.UtcNow;
         var row = new DelegatedToken
         {
             TenantId = tenantId, UserId = userId, AgentId = req.AgentId, EngagementId = req.Resource,
-            Scope = string.Join(' ', asked.Order()),
+            Scope = scope,
             IssuedAt = now,
             ExpiresAt = now.AddMinutes(config.GetValue("Token:LifetimeMinutes", 15)),
         };
+        audit.Jti = row.Jti;
         db.DelegatedTokens.Add(row);
+        // One SaveChanges = one database transaction: the pass and its audit row are saved
+        // together or not at all. If the audit write fails, no pass is issued (fail closed).
         db.SaveChanges();
 
         return Ok(new

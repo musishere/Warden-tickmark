@@ -34,6 +34,7 @@ public class WardenDbContext(DbContextOptions<WardenDbContext> options) : DbCont
     public DbSet<Member> Members => Set<Member>();
     public DbSet<EthicalWall> EthicalWalls => Set<EthicalWall>();
     public DbSet<DelegatedToken> DelegatedTokens => Set<DelegatedToken>();
+    public DbSet<AuditEntry> AuditLog => Set<AuditEntry>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -64,5 +65,11 @@ public class WardenDbContext(DbContextOptions<WardenDbContext> options) : DbCont
         b.Entity<DelegatedToken>().HasOne<User>().WithMany().HasForeignKey(t => t.UserId).OnDelete(DeleteBehavior.Restrict);
         b.Entity<DelegatedToken>().HasOne<Agent>().WithMany().HasForeignKey(t => t.AgentId).OnDelete(DeleteBehavior.Restrict);
         b.Entity<DelegatedToken>().HasOne<Engagement>().WithMany().HasForeignKey(t => t.EngagementId).OnDelete(DeleteBehavior.Restrict);
+
+        // audit_log: no foreign keys (see AuditEntry.cs). Indexed by (tenant, engagement)
+        // because that's how GET /audit reads it. Append-only is enforced by a trigger
+        // in the AuditLog migration, not here: EF can't express triggers.
+        b.Entity<AuditEntry>().ToTable("audit_log");
+        b.Entity<AuditEntry>().HasIndex(a => new { a.TenantId, a.EngagementId });
     }
 }

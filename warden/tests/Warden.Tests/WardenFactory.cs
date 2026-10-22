@@ -88,11 +88,15 @@ public class WardenFactory : WebApplicationFactory<Program>
         return work(scope.ServiceProvider.GetRequiredService<WardenDbContext>());
     }
 
-    // What an agent does: POST /token/exchange with the user's sign-in token.
-    public Task<HttpResponseMessage> Exchange(Guid userId, Guid tenantId, Guid agentId, Guid engagementId, string scope)
+    // An HTTP client to the in-memory API, signed in as a demo user.
+    public HttpClient ClientFor(Guid userId, Guid tenantId)
     {
         var client = CreateClient();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", SignIn(userId, tenantId));
-        return client.PostAsJsonAsync("/token/exchange", new { agent_id = agentId, resource = engagementId, scope });
+        return client;
     }
+
+    // What an agent does: POST /token/exchange with the user's sign-in token.
+    public Task<HttpResponseMessage> Exchange(Guid userId, Guid tenantId, Guid agentId, Guid engagementId, string scope) =>
+        ClientFor(userId, tenantId).PostAsJsonAsync("/token/exchange", new { agent_id = agentId, resource = engagementId, scope });
 }

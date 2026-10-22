@@ -8,7 +8,8 @@
  *
  *   Decide(...)      "may Tickmark, for Sara, get these scopes on Coke?"
  *                    Used by POST /token/exchange before a pass is stamped.
- *     1. the agent is registered
+ *                    Also by GET /audit with no agent (agentId null): Sara herself asking.
+ *     1. the agent is registered (skipped when there is no agent)
  *     2. the engagement exists IN THE USER'S FIRM (another firm's looks the same as missing)
  *     3. the user really exists in that firm
  *     4. walls:      no ethical wall between user and engagement (beats every role, even Admin)
@@ -37,11 +38,11 @@ public static class Decision
 {
     public record Verdict(bool Allowed, string Reason);
 
-    public static Verdict Decide(WardenDbContext db, Guid tenantId, Guid userId, Guid agentId,
+    public static Verdict Decide(WardenDbContext db, Guid tenantId, Guid userId, Guid? agentId,
         Guid engagementId, IReadOnlySet<string> scopes)
     {
-        // 1. the agent is registered.
-        if (db.Agents.Find(agentId) is null)
+        // 1. the agent, if any, is registered.
+        if (agentId is not null && db.Agents.Find(agentId.Value) is null)
             return Deny("unknown agent");
 
         // 2. the engagement is in the user's own firm. tenantId always comes from a verified

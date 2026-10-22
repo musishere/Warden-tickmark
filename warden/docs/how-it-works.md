@@ -1,6 +1,6 @@
 # How Warden works (so far)
 
-A walkthrough of everything built up to **step 7** of [MVP.md](../MVP.md), with diagrams.
+A walkthrough of everything built up to **step 8** of [MVP.md](../MVP.md), with diagrams.
 Diagrams are [Mermaid](https://mermaid.js.org): GitHub and VS Code (with a Mermaid extension)
 draw them as pictures.
 
@@ -20,9 +20,10 @@ flowchart LR
         Auth[Step 4<br/>check sign-in token]
         Ex[Step 6b<br/>POST /token/exchange]
         Jwks[Step 5<br/>GET /.well-known/jwks.json]
+        Aud[Step 8<br/>GET /audit]
         Gate[Step 9 - not built<br/>tool gate]
     end
-    DB[(Postgres<br/>tenants, users, agents,<br/>engagements, members,<br/>ethical_walls,<br/>delegated_tokens)]
+    DB[(Postgres<br/>tenants, users, agents,<br/>engagements, members,<br/>ethical_walls,<br/>delegated_tokens,<br/>audit_log)]
     Tools[Tickmark tools<br/>documents, vouching]
 
     Sara -->|1. signs in| Login
@@ -31,13 +32,14 @@ flowchart LR
     Agent -->|4. sign-in token + what it needs| Ex
     Ex --> Auth
     Ex <--> DB
+    Aud --> DB
     Ex -->|5. 15-min pass| Agent
     Agent -.->|6. tool call + pass| Gate
     Gate -.->|7. forward if allowed| Tools
     Tools -.->|check pass signature| Jwks
 ```
 
-Solid lines are built. Dotted lines are coming (steps 8–12).
+Solid lines are built. Dotted lines are coming (steps 9–12).
 
 ---
 
@@ -46,7 +48,7 @@ Solid lines are built. Dotted lines are coming (steps 8–12).
 ```mermaid
 flowchart TB
     subgraph Core[Warden.Core - plain C#, no web, no database]
-        Domain[Domain/<br/>Tenant, User, Agent, Engagement,<br/>Member + Role, EthicalWall,<br/>DelegatedToken]
+        Domain[Domain/<br/>Tenant, User, Agent, Engagement,<br/>Member + Role, EthicalWall,<br/>DelegatedToken, AuditEntry]
         Perm[Permissions.cs<br/>role -> allowed scopes,<br/>tool -> scope + agents allowed?]
     end
     subgraph Api[Warden.Api - the web app]
@@ -67,17 +69,19 @@ flowchart TB
             Me[Me: GET /me]
             J[Jwks: GET /.well-known/jwks.json]
             T[TokenExchange: POST /token/exchange]
+            Au[Audit: GET /audit]
         end
     end
     subgraph Tests[Warden.Tests - xUnit]
         F[WardenFactory.cs<br/>API in memory on warden_test]
-        TT[HealthTests, AuthTests, SigningKeyTests,<br/>DatabaseTests, TokenExchangeTests,<br/>DecisionTests, SecurityGuaranteeTests]
+        TT[HealthTests, AuthTests, SigningKeyTests,<br/>DatabaseTests, TokenExchangeTests,<br/>DecisionTests, AuditTests,<br/>SecurityGuaranteeTests]
     end
     Api --> Core
     Tests --> Api
     Ctx --> Domain
     T --> Dec
     Dec --> Perm
+    Au --> Dec
 ```
 
 | Python world | .NET world here |
@@ -149,6 +153,19 @@ erDiagram
         timestamptz expires_at
         timestamptz revoked_at "null until revoked"
     }
+    AUDIT_LOG {
+        bigint id PK "counts up"
+        timestamptz at
+        uuid tenant_id "no FKs on purpose"
+        uuid user_id
+        uuid agent_id "null = the user"
+        uuid engagement_id
+        text action
+        text scope
+        bool allowed
+        text reason
+        uuid jti "pass, if any"
+    }
 ```
 
 **What each table means**
@@ -162,6 +179,7 @@ erDiagram
 | `members` | "This user works on this engagement, with this role." No row = no access. |
 | `ethical_walls` | "This user must NEVER touch this engagement." Beats membership and every role. |
 | `delegated_tokens` | The **pass logbook**: one row per pass issued, so passes can be cancelled and audited. |
+| `audit_log` | One row per decision, allowed or denied. **Append-only** (step 8). |
 
 **Rules the database enforces**
 - Every foreign key is `ON DELETE RESTRICT`: deleting a firm that still has users fails, nothing disappears silently.
@@ -178,7 +196,7 @@ flowchart LR
     C -->|dotnet ef database update| D[(Postgres table)]
 ```
 
-Migrations so far: `Initial` → `EthicalWalls` → `DelegatedTokens`. To change the schema,
+Migrations so far: `Initial` → `EthicalWalls` → `DelegatedTokens` → `AuditLog`. To change the schema,
 edit a class or `WardenDbContext`, then **add a new migration**; never edit an old one.
 
 **The demo world** (`dotnet run --project src/Warden.Api -- seed`, fixed ids in `DemoSeed.cs`)
@@ -431,7 +449,42 @@ lives 15 minutes. If a wall goes up or a role changes in that time, the **curren
 
 ---
 
-## 9. Configuration and secrets
+## 9. The audit log (step 8)
+
+Every decision is written to `audit_log`, **allowed and denied**. A token exchange writes its
+audit row in the **same transaction** as the pass: if the audit write fails, no pass is issued.
+
+**Append-only, enforced by Postgres** (hand-written SQL in the `AuditLog` migration):
+
+```mermaid
+flowchart LR
+    I[INSERT] -->|ok| T[(audit_log)]
+    S[SELECT] -->|ok| T
+    U[UPDATE / DELETE / TRUNCATE] -->|trigger: audit_log_append_only| X[ERROR<br/>audit_log is append-only]
+```
+
+It holds even for code that skips Warden: try `delete from audit_log` in psql.
+No foreign keys: a denied attempt may name an agent or engagement that doesn't exist.
+
+**`GET /audit?engagement=<id>`**: the engagement's trail, oldest first.
+
+| Who asks | Answer |
+|---|---|
+| Ali (Manager, Coke) for Coke | 200, Firm A's rows only (Dana's denied attempt on Coke belongs to Firm B's trail) |
+| Sara for Pepsi (walled) | 403 `ethical wall: ...` (the trail would show who works on Pepsi) |
+| Dana (Firm B) for Coke | 403 `engagement not found in your firm` |
+
+Access uses `Decision.Decide` with **no agent** (`agentId: null`): the person asking for themselves.
+
+**A real row** (Sara asks for Pepsi):
+
+| action | scope | allowed | reason | jti |
+|---|---|---|---|---|
+| `token.exchange` | `documents.read` | false | `ethical wall: Works on Coke 2026` | null |
+
+---
+
+## 10. Configuration and secrets
 
 ```mermaid
 flowchart LR
@@ -447,13 +500,13 @@ flowchart LR
 
 ---
 
-## 10. How it's tested
+## 11. How it's tested
 
 ```mermaid
 flowchart TB
     subgraph Collection["xUnit collection 'database' - one at a time, one shared app"]
         DBT[DatabaseTests<br/>direct DbContext,<br/>transaction rolled back]
-        TET[TokenExchangeTests<br/>PassCheckTests<br/>DecisionTests]
+        TET[TokenExchangeTests<br/>PassCheckTests<br/>DecisionTests<br/>AuditTests]
         SGT[SecurityGuaranteeTests]
     end
     F[WardenFactory<br/>API in memory<br/>migrate + seed warden_test once] --> TET
@@ -480,12 +533,13 @@ flowchart TB
 | `SigningKeyTests` | JWKS public, no private fields; Warden-signed pass verifies, forged doesn't |
 | `TokenExchangeTests` | good pass; wall, other firm, unknown agent refused; bad scope 400 |
 | `PassCheckTests` | real pass OK; tampered, forged, sign-in token, unlogged, revoked refused |
+| `AuditTests` | UPDATE/DELETE/TRUNCATE refused; exchange logs allowed + denied; trail is per firm, walled readers refused |
 | `DecisionTests` | tool calls: scope on the pass, agents can't export, walls beat the pass, unknown tool |
 | `SecurityGuaranteeTests` | `agent_cannot_exceed_user_permissions` ✅, `expired_delegated_token_is_rejected` ✅, `ethical_wall_blocks_even_admin` ✅, `tenant_a_cannot_read_tenant_b` ✅ (others switch on in later steps) |
 
 ---
 
-## 11. Handy commands
+## 12. Handy commands
 
 ```bash
 cd warden
@@ -502,14 +556,14 @@ docker compose exec postgres psql -U warden        # \dt, \d members, select ...
 
 ---
 
-## 12. What's next
+## 13. What's next
 
 ```mermaid
 flowchart LR
-    s8[8 audit log] --> s9[9 tool gate] --> s10[10 tool policies] --> s11[11-12 Tickmark through Warden] --> s13[13 revoke + SCIM] --> s14[14 Entra ID] --> s15[15 write-up]
+    s9[9 tool gate] --> s10[10 tool policies] --> s11[11-12 Tickmark through Warden] --> s13[13 revoke + SCIM] --> s14[14 Entra ID] --> s15[15 write-up]
 ```
 
 Known limits right now:
 - The agent only *says* who it is (`agent_id`); proper agent authentication comes later.
-- Refused attempts aren't recorded yet (audit log, step 8).
+- `GET /audit` returns the whole trail (no paging yet).
 - The decision function exists, but nothing calls `DecideTool` yet: there is no gate until step 9.

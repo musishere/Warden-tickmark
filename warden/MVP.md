@@ -30,7 +30,7 @@ Each step is small: a few files, one test that proves it, and a commit.
 
 ### Phase 3 — The rules
 - [x] 7. Decision function: walls → membership → role → tool policy → scope, with a reason — `ethical_wall_blocks_even_admin`, `tenant_a_cannot_read_tenant_b`
-- [ ] 8. Append-only audit log + `GET /audit?engagement=`
+- [x] 8. Append-only audit log + `GET /audit?engagement=`
 
 ### Phase 4 — The gate
 - [ ] 9. `POST /tools/{tool}/invoke`: check pass (signature, expiry, audience, not revoked) → decide → log → forward; any error = deny
