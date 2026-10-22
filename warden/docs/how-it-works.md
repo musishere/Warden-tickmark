@@ -1,6 +1,6 @@
-# How Warden works (so far)
+# How Warden works
 
-A walkthrough of everything built up to **step 8** of [MVP.md](../MVP.md), with diagrams.
+A walkthrough of everything built in steps 1–14 of [MVP.md](../MVP.md), with diagrams.
 Diagrams are [Mermaid](https://mermaid.js.org): GitHub and VS Code (with a Mermaid extension)
 draw them as pictures.
 
@@ -14,32 +14,40 @@ sign-in token for a narrow, 15-minute **pass**, and every tool call is checked a
 ```mermaid
 flowchart LR
     Sara([Sara<br/>auditor at Firm A])
-    Login[Sign-in service<br/>now: DevIssuer<br/>later: Entra ID]
-    Agent[Tickmark agent]
+    Login[Sign-in<br/>Entra ID, or DevIssuer in dev]
+    IdP[Firm's identity provider<br/>SCIM]
+    Agent[Tickmark agent<br/>python -m tickmark.agent]
     subgraph W[Warden API]
-        Auth[Step 4<br/>check sign-in token]
-        Ex[Step 6b<br/>POST /token/exchange]
+        Auth[Step 4/14<br/>check sign-in token]
+        Ex[Step 6<br/>POST /token/exchange]
+        Gate[Step 9<br/>POST /tools/tool/invoke]
+        Dec[Step 7<br/>Decision]
         Jwks[Step 5<br/>GET /.well-known/jwks.json]
         Aud[Step 8<br/>GET /audit]
-        Gate[Step 9 - not built<br/>tool gate]
+        Off[Step 13<br/>/token/revoke<br/>/scim/v2/Users]
     end
     DB[(Postgres<br/>tenants, users, agents,<br/>engagements, members,<br/>ethical_walls,<br/>delegated_tokens,<br/>audit_log)]
-    Tools[Tickmark tools<br/>documents, vouching]
+    Tools[Tickmark tools, step 11<br/>list_documents, read_document,<br/>run_vouch]
 
     Sara -->|1. signs in| Login
     Login -->|2. sign-in token| Sara
     Sara -->|3. asks agent to work| Agent
     Agent -->|4. sign-in token + what it needs| Ex
     Ex --> Auth
-    Ex <--> DB
-    Aud --> DB
+    Ex --> Dec
     Ex -->|5. 15-min pass| Agent
-    Agent -.->|6. tool call + pass| Gate
-    Gate -.->|7. forward if allowed| Tools
-    Tools -.->|check pass signature| Jwks
+    Agent -->|6. tool call + pass| Gate
+    Gate --> Dec
+    Gate -->|7. 60-s token, if allowed| Tools
+    Tools -->|check Warden's signature| Jwks
+    Dec <--> DB
+    Aud --> DB
+    IdP -->|leaver| Off
+    Off --> DB
 ```
 
-Solid lines are built. Dotted lines are coming (steps 9–12).
+Everything in this picture is built. Only the real Entra app registration is a manual step
+([entra.md](entra.md)).
 
 ---
 
@@ -63,6 +71,7 @@ flowchart TB
             Key[WardenSigningKey.cs<br/>RSA key pair]
             Pass[AgentPass.cs<br/>what is in a pass]
             Dec[Decision.cs<br/>may they? + reason]
+            Entra[EntraSignIn.cs<br/>Entra token -> Warden user]
         end
         subgraph Ctrl[Controllers/]
             H[Health: GET /health]
@@ -70,6 +79,9 @@ flowchart TB
             J[Jwks: GET /.well-known/jwks.json]
             T[TokenExchange: POST /token/exchange]
             Au[Audit: GET /audit]
+            G[ToolGate: POST /tools/tool/invoke]
+            Rv[Revoke: POST /token/revoke]
+            Sc[Scim: PATCH /scim/v2/Users/id]
         end
     end
     subgraph Tests[Warden.Tests - xUnit]
@@ -82,6 +94,7 @@ flowchart TB
     T --> Dec
     Dec --> Perm
     Au --> Dec
+    G --> Dec
 ```
 
 | Python world | .NET world here |
@@ -122,6 +135,9 @@ erDiagram
         uuid tenant_id FK
         text email "unique per tenant"
         text name
+        bool active "false after SCIM"
+        uuid entra_tenant_id "Entra link"
+        uuid entra_object_id "Entra link"
     }
     AGENTS {
         uuid id PK
@@ -196,7 +212,7 @@ flowchart LR
     C -->|dotnet ef database update| D[(Postgres table)]
 ```
 
-Migrations so far: `Initial` → `EthicalWalls` → `DelegatedTokens` → `AuditLog`. To change the schema,
+Migrations so far: `Initial` → `EthicalWalls` → `DelegatedTokens` → `AuditLog` → `UserActive` → `EntraLink`. To change the schema,
 edit a class or `WardenDbContext`, then **add a new migration**; never edit an old one.
 
 **The demo world** (`dotnet run --project src/Warden.Api -- seed`, fixed ids in `DemoSeed.cs`)
@@ -496,17 +512,114 @@ flowchart LR
 |---|---|---|
 | DB connection | `appsettings.json` (local Docker password, not a secret) | env var / Key Vault, or managed identity |
 | Dev sign-in key | `appsettings.json`, only trusted in Development | not used (Entra) |
+| Entra `TenantId`, `ClientId` | empty = Entra off; set in `appsettings.Development.json` ([entra.md](entra.md)) | env vars |
+| Tool server `Tools:BaseUrl`, `Tools:Audience` | `http://localhost:8000/`, `tickmark-tools` | the tool service's address |
+| SCIM secret per firm `Scim:Tenants:<id>` | not set = SCIM refuses everything | Key Vault |
 | Warden signing key | generated at startup in Development | `Signing:PrivateKeyPem` from Key Vault |
 
 ---
 
-## 11. How it's tested
+## 11. The tool gate (steps 9–10)
+
+`POST /tools/{tool}/invoke` (`Controllers/ToolGateController.cs`) is the only way an agent reaches
+a tool. It takes the agent's **pass**, not a sign-in token.
+
+```mermaid
+sequenceDiagram
+    participant T as Tickmark agent
+    participant G as Warden gate
+    participant DB as Postgres
+    participant K as Tickmark tools
+
+    T->>G: POST /tools/run_vouch/invoke<br/>Bearer: pass · {period, currency}
+    G->>G: 1. AgentPass.Check: signature, iss, aud, not expired
+    G->>DB: ...in the logbook? not revoked?
+    G->>DB: 2. DecideTool: walls, member, role (today's data),<br/>tool policy, scope on the pass
+    G->>DB: 3. INSERT audit_log (allowed or denied)
+    G->>K: 4. POST /tools/run_vouch<br/>Bearer: NEW 60-second token (aud tickmark-tools, tool run_vouch)
+    K-->>G: verdicts
+    G-->>T: verdicts, as-is
+```
+
+| What goes wrong | Answer | Forwarded? | In the audit log? |
+|---|---|---|---|
+| no pass / garbage / a sign-in token | 401 | no | no (no trusted firm), app log only |
+| pass revoked | 401 `pass revoked` | no | yes |
+| scope not on the pass | 403 `pass does not include vouch.run` | no | yes |
+| `export_documents` by any agent | 403 `export_documents may not be called by an agent` | no | yes |
+| audit write fails | 500 | no | — |
+| tool server down | 502 | tried | yes (as allowed) |
+
+**Why a second token to the tools?** If Warden forwarded the agent's own pass, the agent could skip
+Warden and send that pass straight to Tickmark. The forwarded token has a different audience
+(`tickmark-tools`), lives 60 seconds, and names one tool. The agent never sees it.
+
+---
+
+## 12. Tickmark behind Warden (steps 11–12)
+
+**Tickmark's tools** (`tickmark/src/tickmark/api/tools.py`) accept only Warden's forwarded token:
+Warden's signature (public key from the JWKS), `iss` = warden, `aud` = tickmark-tools, not expired,
+`tool` = this tool. The engagement comes from the token's `eng`, never the body. Files live in
+`tickmark/data/engagements/<engagement id>/` (`make warden-demo`).
+
+**The agent** (`tickmark/src/tickmark/agent.py`) uses `WardenClient`: exchange → `list_documents` →
+`run_vouch`. Any "no", or Warden being down, raises `WardenDenied` and the agent stops.
+
+**Real run** (both servers up, `make agent TOKEN=<Sara's dev token>`):
+
+```
+5 documents: inv_101.pdf, inv_102.pdf, inv_103.pdf, inv_104.pdf, inv_105.pdf
+   E-1 ✅  inv_101.pdf
+   ...
+   E-5 ⚠️  inv_105.pdf  (amount differs: row 432.26, PDF 423.26, +9.00 (row − PDF))
+   E-6 ❓  -  (no PDF agrees on two or more fields)
+```
+Same for Pepsi: `Warden said no, stopping: 403 ... ethical wall: Works on Coke 2026`.
+Calling Tickmark's tools directly: `{"detail":"only Warden may call Tickmark's tools"}`.
+Coke's audit trail: `token.exchange ✅`, `list_documents ✅`, `run_vouch ✅`. Pepsi's: `token.exchange ❌ ethical wall`.
+
+---
+
+## 13. The off switch (step 13)
+
+```mermaid
+flowchart LR
+    U[Sara: POST /token/revoke<br/>jti of HER pass] -->|revoked_at = now| L[(delegated_tokens)]
+    E[Entra SCIM: PATCH /scim/v2/Users/id<br/>active = False] -->|users.active = false<br/>+ revoke ALL her live passes| L
+    L --> G[gate: next call<br/>401 pass revoked]
+    E --> D[Decision: user deactivated<br/>no new passes]
+```
+
+- **Revoke**: only the pass's own user; anyone else gets the same 404 as "doesn't exist".
+- **SCIM**: the firm's identity provider authenticates with that firm's secret
+  (`Scim:Tenants:<tenant id>`), and can only touch that firm's users. Entra sends `"False"` as a
+  string; `false` and `{ "active": false }` work too. Deactivation and revocation are one
+  transaction, with an audit row per revoked pass.
+- **"Running work stops"**: the agent's very next tool call is refused. A call already in progress
+  (one `run_vouch`) finishes.
+
+---
+
+## 14. Entra ID sign-in (step 14)
+
+Set `Entra:TenantId` + `Entra:ClientId` and Warden also accepts Entra tokens
+(`Auth/EntraSignIn.cs`). Entra's keys come from its metadata; issuer (your tenant) and audience
+(Warden's app) are pinned. Then the token's `tid` + `oid` must be **linked** to a Warden user
+(`dotnet run -- link-entra sara <tid> <oid>`); the request continues as that user, with Warden's
+own ids, so nothing after sign-in knows or cares which kind of token it was.
+
+Tests use a fake Entra (a key pair made in the test); the real setup is [entra.md](entra.md).
+
+---
+
+## 15. How it's tested
 
 ```mermaid
 flowchart TB
     subgraph Collection["xUnit collection 'database' - one at a time, one shared app"]
         DBT[DatabaseTests<br/>direct DbContext,<br/>transaction rolled back]
-        TET[TokenExchangeTests<br/>PassCheckTests<br/>DecisionTests<br/>AuditTests]
+        TET[TokenExchangeTests, PassCheckTests,<br/>DecisionTests, AuditTests,<br/>ToolGateTests, RevokeTests,<br/>EntraTests]
         SGT[SecurityGuaranteeTests]
     end
     F[WardenFactory<br/>API in memory<br/>migrate + seed warden_test once] --> TET
@@ -535,11 +648,15 @@ flowchart TB
 | `PassCheckTests` | real pass OK; tampered, forged, sign-in token, unlogged, revoked refused |
 | `AuditTests` | UPDATE/DELETE/TRUNCATE refused; exchange logs allowed + denied; trail is per firm, walled readers refused |
 | `DecisionTests` | tool calls: scope on the pass, agents can't export, walls beat the pass, unknown tool |
-| `SecurityGuaranteeTests` | `agent_cannot_exceed_user_permissions` ✅, `expired_delegated_token_is_rejected` ✅, `ethical_wall_blocks_even_admin` ✅, `tenant_a_cannot_read_tenant_b` ✅ (others switch on in later steps) |
+| `ToolGateTests` | allowed call forwarded with a 60-s tool token and logged; no/fake pass 401; missing scope 403; revoked 401; tool server down 502 |
+| `RevokeTests` | revoke your own pass; nobody else can; SCIM needs the firm's secret, reaches only its users, only changes `active` |
+| `EntraTests` | linked Entra account = its Warden user, gets a pass; unlinked / wrong app / other tenant / forged → 401 |
+| `SecurityGuaranteeTests` | `agent_cannot_exceed_user_permissions`, `expired_delegated_token_is_rejected`, `ethical_wall_blocks_even_admin`, `tenant_a_cannot_read_tenant_b`, `prompt_injection_cannot_trigger_export`, `scim_deactivation_revokes_agent_tokens` ✅ (credits and human approval: later) |
+| `tickmark/tests/test_warden.py` | tools refuse anything but a Warden-forwarded token for that tool; no path escape; client fails closed |
 
 ---
 
-## 12. Handy commands
+## 16. Handy commands
 
 ```bash
 cd warden
@@ -550,20 +667,23 @@ dotnet ef database update -p src/Warden.Api        # apply migrations to dev DB
 dotnet ef migrations list -p src/Warden.Api
 dotnet run --project src/Warden.Api -- seed        # demo data
 dotnet run --project src/Warden.Api -- dev-token sara
-dotnet run --project src/Warden.Api --urls http://localhost:5099
+dotnet run --project src/Warden.Api -- link-entra sara <tid> <oid>
+dotnet run --project src/Warden.Api --urls http://localhost:5000
+cd ../tickmark && make warden-demo && make run      # Tickmark's tools on :8000
+make agent TOKEN=<dev token>                       # vouch Coke through Warden (ENG=... for another)
 docker compose exec postgres psql -U warden        # \dt, \d members, select ...
 ```
 
 ---
 
-## 13. What's next
+## 17. What's next
 
-```mermaid
-flowchart LR
-    s9[9 tool gate] --> s10[10 tool policies] --> s11[11-12 Tickmark through Warden] --> s13[13 revoke + SCIM] --> s14[14 Entra ID] --> s15[15 write-up]
-```
+The MVP is built. Left: the real Entra app registration ([entra.md](entra.md)), then the
+"Later" list in [MVP.md](../MVP.md): credits, human approval, Excel add-in sign-in, an
+MCP-compatible proxy, deployment.
 
-Known limits right now:
+Known limits (also in [rfc.md](rfc.md) §9):
 - The agent only *says* who it is (`agent_id`); proper agent authentication comes later.
 - `GET /audit` returns the whole trail (no paging yet).
-- The decision function exists, but nothing calls `DecideTool` yet: there is no gate until step 9.
+- Revocation stops the agent at its next call, not in the middle of one.
+- One Entra tenant; SCIM secrets in config; only SCIM `active` is synced.

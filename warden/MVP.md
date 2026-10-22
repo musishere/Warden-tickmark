@@ -47,7 +47,7 @@ Each step is small: a few files, one test that proves it, and a commit.
 - [ ] 14. Entra test tenant app registration; accept Entra tokens (`tid`, `oid`) — code + fake-Entra tests done; the real app registration is a manual step: [docs/entra.md](docs/entra.md)
 
 ### Phase 8 — Write it up
-- [ ] 15. RFC, threat model, README (problem → architecture → trade-offs)
+- [x] 15. RFC, threat model, README (problem → architecture → trade-offs)
 
 ## Later
 Credits (reserve → settle, concurrency test), human approval (`override_requires_human_approval`),

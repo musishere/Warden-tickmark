@@ -9,7 +9,7 @@ every read and action going through Warden. The LLM extracts; code decides.
 - [ ] Every extracted value keeps a snip (page, bbox, text)
 - [x] Deterministic checks: line items sum, VAT, date in period, duplicates (+ totals reconcile). See PROGRESS.md §8
 - [x] Match sample rows to invoices (vendor, amount, date, number) → ✅ / ⚠️ / ❓ (+ 👀 needs review). See PROGRESS.md §5, §8
-- [ ] All document access via `WardenClient` (token exchange, invoke); deny on any failure
+- [x] All document access via `WardenClient` (token exchange, invoke); deny on any failure — the agent (`python -m tickmark.agent`, tools in `api/tools.py`); the web app is still a local stand-in
 - [ ] `POST /engagements/{id}/vouch` and `GET /engagements/{id}/runs/{runId}`
 - [x] Storage: Tickmark's own PostgreSQL (append-only audit trail of runs, documents by hash, results,
   reviews); Docker Compose for local dev. See PROGRESS.md §10
