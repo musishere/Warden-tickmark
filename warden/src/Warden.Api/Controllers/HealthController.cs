@@ -8,12 +8,17 @@
  * ControllerBase gives helpers like Ok(...) (200), NotFound() (404), Forbid() (403).
  *
  * Used by Docker/Azure to check the app is alive.
+ *
+ * [AllowAnonymous]: every endpoint needs a sign-in token by default (Program.cs).
+ * This one opts out, because health checkers don't sign in.
  */
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Warden.Api.Controllers;
 
 [ApiController]
+[AllowAnonymous]
 [Route("health")]
 public class HealthController : ControllerBase
 {

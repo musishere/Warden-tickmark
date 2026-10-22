@@ -24,7 +24,7 @@ Each step is small: a few files, one test that proves it, and a commit.
 - [x] 3. Ethical walls + demo seed (Firm A: Coke, Pepsi with a wall; Firm B: Acme; Sara, Ali, admin; Tickmark agent)
 
 ### Phase 2 — Identity
-- [ ] 4. Validate the user's sign-in token; tenant from the verified token only
+- [x] 4. Validate the user's sign-in token; tenant from the verified token only
 - [ ] 5. Warden's signing key + JWKS endpoint
 - [ ] 6. `POST /token/exchange` (stored by `jti`) — `agent_cannot_exceed_user_permissions`, `expired_delegated_token_is_rejected`
 
