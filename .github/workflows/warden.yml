@@ -1,0 +1,30 @@
+name: warden
+
+on:
+  push:
+    paths: ["warden/**", ".github/workflows/warden.yml"]
+  pull_request:
+    paths: ["warden/**", ".github/workflows/warden.yml"]
+
+defaults:
+  run:
+    working-directory: warden
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:  # same credentials and port as docker-compose.yml
+        image: postgres:17
+        env:
+          POSTGRES_USER: warden
+          POSTGRES_PASSWORD: warden
+          POSTGRES_DB: warden
+        ports: ["5433:5432"]
+        options: --health-cmd "pg_isready -U warden" --health-interval 2s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - run: dotnet test
