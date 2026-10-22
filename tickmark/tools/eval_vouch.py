@@ -4,6 +4,10 @@ labelled defects.
     python -m tools.eval_vouch --labels   # perfect extraction from labels: tests the rules alone
     python -m tools.eval_vouch            # with Azure Document Intelligence (cached)
 
+Item lines are checked with --labels (to measure every check) and off otherwise, as in production.
+The hand-checked datasets (TRUTHED) are judged against the visible invoice, not their labels, so
+--labels skips them.
+
 The dangerous error is a false ✅ (a row passed although the labels say difference or no evidence):
 the run exits 1 if there is any.
 """
@@ -96,6 +100,9 @@ def defect_truth(run) -> dict[str, set[str]]:
 
 def evaluate(name: str, use_labels: bool, azure: str = "auto", line_items: bool = True) -> int:
     base, period, truth_fn = DATASETS[name]
+    if use_labels and base in TRUTHED.values():
+        print(f"{name}: skipped (truth is the visible invoice, not labels: run without --labels)\n")
+        return 0
     if not (base / "sample.xlsx").exists():
         print(f"{name}: skipped ({base} missing)\n")
         return 0
@@ -145,11 +152,13 @@ def evaluate(name: str, use_labels: bool, azure: str = "auto", line_items: bool 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--labels", action="store_true", help="extract from label JSON (perfect extraction)")
-    ap.add_argument("--line-items", action=argparse.BooleanOptionalAction, default=True,
-                    help="check item lines (default on here, to measure every check)")
+    ap.add_argument("--line-items", action=argparse.BooleanOptionalAction, default=None,
+                    help="check item lines (default: on with --labels, off otherwise as in production)")
     add_reader_args(ap)
     ap.add_argument("datasets", nargs="*", choices=list(DATASETS), help="default: all")
     args = ap.parse_args()
+    if args.line_items is None:
+        args.line_items = args.labels
     print(f"extraction: {'labels (perfect, tests the rules only)' if args.labels else f'own text, Azure {args.azure}'}"
           f" | item lines {'on' if args.line_items else 'off'}\n")
     false_ok = sum(evaluate(d, args.labels, args.azure, args.line_items) for d in args.datasets or DATASETS)

@@ -4,13 +4,16 @@
   identification needs_review -> 👀 needs_review (not compared: which PDF it is is not settled)
   linked:
     any field differs or any check fails   -> ⚠️ difference (every field and check listed)
-    else a claimed field unverifiable, a possible duplicate not settled, or a total nothing shows to
-         add up (totals not checkable)      -> 👀 needs_review (never ✅ on missing evidence)
+    else a claimed field unverifiable, a possible duplicate not settled, a total nothing shows to
+         add up (totals not checkable), or item lines the engagement asked for but that could not
+         be read                            -> 👀 needs_review (never ✅ on missing evidence)
     else                                    -> ✅ matched
 A check that warns (e.g. the number is also used by another vendor) is shown but does not block ✅, nor
-does a side check that could not run (VAT rate, item lines, period): the claim itself is backed. Totals
-are the exception: a total that matches the row proves nothing if the invoice's own sums are unknown
-(measured: an invoice whose lines add up to 2112 under a printed total of 9312 was passed).
+does a side check that could not run (VAT rate, period, item lines when not asked for): the claim
+itself is backed. Totals are the exception: a total that matches the row proves nothing if the
+invoice's own sums are unknown (measured: an invoice whose lines add up to 2112 under a printed total
+of 9312 was passed). Item lines too, once the engagement turns them on (measured: unread lines under
+a total they do not add up to were passed).
 """
 from tickmark.definitions import INVOICE_VOUCHING, Definition
 from tickmark.log import get
@@ -55,6 +58,8 @@ def _verdict(ident: Identification, cr: CleanRow, by_file: dict[str, ExtractedIn
     fails = [f"{c.name} failed: {c.detail}" for c in checks if c.status == "fail"]
     unknown = [f"{a.field} unverifiable: {a.detail}" for a in agreements if a.result == "unverifiable"]
     blocking = ("duplicate", "totals_reconcile")  # a double payment; a total nothing shows to add up
+    if policy.line_items:  # the engagement asked for the item lines: unread is missing evidence, not a note
+        blocking += ("lines_sum",)
     unknown += [f"{c.name} not checkable: {c.detail}" for c in checks
                 if c.status == "not_checkable" and c.name in blocking]
     warns = [f"{c.name} warning: {c.detail}" for c in checks if c.status == "warn"]

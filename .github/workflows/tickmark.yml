@@ -1,0 +1,37 @@
+name: tickmark
+
+on:
+  push:
+    paths: ["tickmark/**", ".github/workflows/tickmark.yml"]
+  pull_request:
+    paths: ["tickmark/**", ".github/workflows/tickmark.yml"]
+
+defaults:
+  run:
+    working-directory: tickmark
+
+jobs:
+  test-and-eval:
+    runs-on: ubuntu-latest
+    services:
+      postgres:  # the db-marked tests (tenancy, append-only, app role) run instead of skipping
+        image: postgres:17
+        env:
+          POSTGRES_USER: tickmark
+          POSTGRES_PASSWORD: tickmark
+          POSTGRES_DB: tickmark
+        ports: ["5435:5432"]
+        options: --health-cmd "pg_isready -U tickmark" --health-interval 2s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: make setup
+      # data/ is gitignored: the seeded test sets are regenerated; real/variety sets stay local (make eval-real)
+      - run: make demo
+      - run: make test
+      - name: eval (perfect reading, rules only; exits 1 on any wrong link / false ✅)
+        run: |
+          .venv/bin/python -m tools.eval_identify --labels
+          .venv/bin/python -m tools.eval_vouch --labels generated hard
+      - name: eval (own PDF text, no Azure)
+        run: .venv/bin/python -m tools.eval_vouch --azure off generated hard
