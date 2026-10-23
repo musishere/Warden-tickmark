@@ -70,7 +70,7 @@ learns their tools from them. Tickmark is only the demo agent and demo tool serv
   `unknown_agent_is_refused_even_with_a_valid_sign_in`
 - [x] 18. Per-agent ceiling: each registered agent gets `allowed_scopes`; a pass is
   agent ceiling ∩ user's rights ∩ what was asked — `agent_cannot_exceed_its_registration`
-- [ ] 18a. Warden in front of any MCP server: the firm's admin connects upstream MCP servers
+- [x] 18a. Warden in front of any MCP server: the firm's admin connects upstream MCP servers
   (address + how Warden signs in to each; agents never see either). `tools/list` asks each upstream
   for its tools; a per-tool table maps each one to a scope. A tool with no scope assigned is hidden
   and refused (fail closed: a tool an upstream adds tomorrow stays off until an admin says so).

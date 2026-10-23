@@ -18,6 +18,8 @@
  *   dotnet run -- seed             insert the demo data (Data/DemoSeed.cs)
  *   dotnet run -- dev-token sara   print a dev sign-in token for a demo user
  *   dotnet run -- link-entra sara <tid> <oid>   let a real Entra account sign in as that user
+ *   dotnet run -- add-upstream "Firm A" <name> <mcp url> <audience>   connect a firm's MCP server
+ *   dotnet run -- assign-tool "Firm A" <server> <tool> <scope>        let agents use one of its tools
  *
  * The last line ("public partial class Program;") lets the test project start
  * this app in memory (WebApplicationFactory<Program>), like FastAPI's TestClient.
@@ -75,6 +77,9 @@ builder.Services.AddHttpClient("tools", c =>
     c.Timeout = TimeSpan.FromMinutes(5);  // run_vouch reads every PDF: it can take a while
 });
 
+// A firm's own MCP servers behind Warden (Auth/UpstreamMcp.cs, step 18a). Tests swap in a fake.
+builder.Services.AddHttpClient("upstream", c => c.Timeout = TimeSpan.FromMinutes(5));
+
 // The tool gate (Auth/ToolGate.cs). Scoped = one per request, sharing that request's database session.
 builder.Services.AddScoped<ToolGate>();
 
@@ -107,6 +112,50 @@ if (args.Length == 4 && args[0] == "link-entra")
     (user.EntraTenantId, user.EntraObjectId) = (Guid.Parse(args[2]), Guid.Parse(args[3]));
     db.SaveChanges();
     Console.WriteLine($"{user.Name} now signs in with Entra account {args[3]} (tenant {args[2]}).");
+    return;
+}
+
+// `dotnet run -- add-upstream "Firm A" docs https://docs-mcp.firma.example/mcp firm-a-docs`:
+// connect one of a firm's own MCP servers behind Warden (name, MCP address, token audience).
+// Its tools stay hidden until assign-tool says which scope each one needs (step 18a).
+if (args.Length == 5 && args[0] == "add-upstream")
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<WardenDbContext>();
+    var tenant = db.Tenants.Single(t => t.Name.ToLower() == args[1].ToLower());
+    db.UpstreamServers.Add(new Warden.Core.Domain.UpstreamServer { TenantId = tenant.Id, Name = args[2], Url = args[3], Audience = args[4] });
+    db.SaveChanges();
+    Console.WriteLine($"{tenant.Name}: {args[2]} connected at {args[3]}. Its tools are hidden until you assign-tool them.");
+    return;
+}
+
+// `dotnet run -- assign-tool "Firm A" docs search documents.read`: let agents use one tool of an
+// upstream server, needing that scope. Run again to change the scope.
+if (args.Length == 5 && args[0] == "assign-tool")
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<WardenDbContext>();
+    var tenant = db.Tenants.Single(t => t.Name.ToLower() == args[1].ToLower());
+    var server = db.UpstreamServers.Single(u => u.TenantId == tenant.Id && u.Name == args[2]);
+    if (!Warden.Core.Permissions.AllScopes.Contains(args[4]))
+    {
+        Console.Error.WriteLine($"unknown scope {args[4]}; one of: {string.Join(' ', Warden.Core.Permissions.AllScopes)}");
+        Environment.ExitCode = 1;
+        return;
+    }
+    var row = db.UpstreamTools.Find(tenant.Id, args[3]);
+    if (row is null)
+        db.UpstreamTools.Add(new Warden.Core.Domain.UpstreamTool { TenantId = tenant.Id, Name = args[3], ServerId = server.Id, Scope = args[4] });
+    else if (row.ServerId != server.Id)
+    {
+        Console.Error.WriteLine($"{tenant.Name} already has a tool called {args[3]} on another server");
+        Environment.ExitCode = 1;
+        return;
+    }
+    else
+        row.Scope = args[4];
+    db.SaveChanges();
+    Console.WriteLine($"{tenant.Name}: agents may now use {args[2]}/{args[3]} with {args[4]}.");
     return;
 }
 

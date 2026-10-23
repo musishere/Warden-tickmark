@@ -49,6 +49,7 @@ public class WardenFactory : WebApplicationFactory<Program>
     public const string TestDb = "Host=localhost;Port=5433;Database=warden_test;Username=warden;Password=warden";
 
     public FakeTools Tools { get; } = new();
+    public FakeUpstream Upstream { get; } = new();
     public const string ScimSecret = "firm-a-scim-secret-for-tests";
     public static readonly Guid FakeEntraTenant = Guid.Parse("e17a0000-0000-0000-0000-000000000001");
     public const string FakeEntraClient = "warden-test-api";
@@ -80,6 +81,7 @@ public class WardenFactory : WebApplicationFactory<Program>
         builder.ConfigureTestServices(s =>
         {
             s.AddHttpClient("tools").ConfigurePrimaryHttpMessageHandler(() => Tools);
+            s.AddHttpClient("upstream").ConfigurePrimaryHttpMessageHandler(() => Upstream);
             s.PostConfigure<JwtBearerOptions>(EntraSignIn.Scheme, o => o.ConfigurationManager =
                 new StaticConfigurationManager<OpenIdConnectConfiguration>(new OpenIdConnectConfiguration { SigningKeys = { FakeEntraKey } }));
         });
@@ -215,4 +217,54 @@ public class FakeTools : HttpMessageHandler
         LastBody = request.Content is null ? null : await request.Content.ReadAsStringAsync(ct);
         return new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(new { ok = true }) };
     }
+}
+
+// Stands in for a firm's own MCP server behind Warden (step 18a), e.g. a SharePoint MCP server.
+// Speaks MCP like a real one: initialize hands out a session id that later messages must carry,
+// and tools/call answers as a server-sent event stream (text/event-stream), not plain JSON.
+// It offers two tools, `search` and `delete_all`. Remembers every tools/call it got.
+public class FakeUpstream : HttpMessageHandler
+{
+    public const string Url = "http://firm-a-docs.test/mcp";
+    public const string Audience = "firm-a-docs";
+    public List<(string Tool, string Token, string Body)> Calls { get; } = [];
+    public bool Down { get; set; }
+    public void Reset() { Calls.Clear(); Down = false; }
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        if (Down) throw new HttpRequestException("connection refused");
+        var msg = await request.Content!.ReadFromJsonAsync<JsonElement>(ct);
+        var method = msg.GetProperty("method").GetString();
+        if (method == "initialize")
+        {
+            var init = Json(msg, new { protocolVersion = "2025-06-18", capabilities = new { tools = new { } }, serverInfo = new { name = "docs" } });
+            init.Headers.Add("Mcp-Session-Id", "s-1");
+            return init;
+        }
+        if (!request.Headers.TryGetValues("Mcp-Session-Id", out var session) || session.Single() != "s-1")
+            return new HttpResponseMessage(HttpStatusCode.BadRequest);
+        if (!msg.TryGetProperty("id", out _))
+            return new HttpResponseMessage(HttpStatusCode.Accepted);
+        if (method == "tools/list")
+            return Json(msg, new { tools = new[] {
+                new { name = "search", description = "Search the firm's documents.", inputSchema = new { type = "object" } },
+                new { name = "delete_all", description = "Delete every document.", inputSchema = new { type = "object" } } } });
+
+        // tools/call: answered as an event stream.
+        var p = msg.GetProperty("params");
+        var tool = p.GetProperty("name").GetString()!;
+        Calls.Add((tool, request.Headers.Authorization!.Parameter!, p.GetProperty("arguments").GetRawText()));
+        var reply = JsonSerializer.Serialize(new { jsonrpc = "2.0", id = msg.GetProperty("id"),
+            result = new { content = new[] { new { type = "text", text = $"called {tool}" } }, isError = false } });
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent($"event: message\ndata: {reply}\n\n", System.Text.Encoding.UTF8, "text/event-stream"),
+        };
+    }
+
+    static HttpResponseMessage Json(JsonElement msg, object result) => new(HttpStatusCode.OK)
+    {
+        Content = JsonContent.Create(new { jsonrpc = "2.0", id = msg.GetProperty("id"), result }),
+    };
 }

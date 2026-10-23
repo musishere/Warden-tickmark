@@ -19,7 +19,7 @@
  *
  *   DecideTool(...)  "may the holder of this pass call this tool?"
  *                    Used by the tool gate (step 9), after AgentPass.Check says the pass is real.
- *     0. the tool exists
+ *     0. the tool exists: built in, or assigned a scope by an admin on an upstream MCP server
  *     1-6. Decide(...) again, with TODAY's data: a wall, role or agent-registration change made after the pass
  *          was stamped still applies, the pass doesn't freeze old rights
  *     7. tool policy: agents may call this tool at all (export_documents: humans only)
@@ -85,26 +85,33 @@ public static class Decision
         return new Verdict(true, "allowed");
     }
 
+    // The scope a tool needs, or null if the firm has no such tool: a built-in tool
+    // (Permissions.Tools) or one an admin assigned on an upstream MCP server (UpstreamTool, step 18a).
+    // ponytail: built-ins win a name clash; they go away in step 18b.
+    public static string? ToolScope(WardenDbContext db, Guid tenantId, string tool) =>
+        Permissions.Tools.TryGetValue(tool, out var rule) ? rule.Scope : db.UpstreamTools.Find(tenantId, tool)?.Scope;
+
     // `pass` is the logbook row AgentPass.Check returned: who, which agent, which engagement, which scopes.
     public static Verdict DecideTool(WardenDbContext db, DelegatedToken pass, string tool)
     {
-        // 0. unknown tool: nothing to allow.
-        if (!Permissions.Tools.TryGetValue(tool, out var rule))
+        // 0. unknown tool (including an upstream tool no admin has assigned): nothing to allow.
+        if (ToolScope(db, pass.TenantId, tool) is not { } scope)
             return Deny($"unknown tool: {tool}");
 
         // 1-6. agent ceiling -> walls -> membership -> role, against the data as it is right now.
         var verdict = Decide(db, pass.TenantId, pass.UserId, pass.AgentId, pass.EngagementId,
-            new HashSet<string> { rule.Scope });
+            new HashSet<string> { scope });
         if (!verdict.Allowed)
             return verdict;
 
-        // 7. tool policy: some tools are for humans only, whatever the role.
-        if (!rule.AgentsAllowed)
+        // 7. tool policy: some built-in tools are for humans only, whatever the role.
+        //    (An upstream tool is for agents by being assigned: that's the admin's yes.)
+        if (Permissions.Tools.TryGetValue(tool, out var rule) && !rule.AgentsAllowed)
             return Deny($"{tool} may not be called by an agent");
 
         // 8. the pass must carry the scope (the user may have more rights than they gave the agent).
-        if (!Permissions.Parse(pass.Scope).Contains(rule.Scope))
-            return Deny($"pass does not include {rule.Scope}");
+        if (!Permissions.Parse(pass.Scope).Contains(scope))
+            return Deny($"pass does not include {scope}");
 
         return new Verdict(true, "allowed");
     }

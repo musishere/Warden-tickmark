@@ -51,7 +51,7 @@ Postgres triggers, and SCIM deprovisioning. It fails closed everywhere.
 |---|---|---|
 | 🪪 staff ID card | sign-in token (Entra or dev) | `Auth/DevIssuer.cs`, `Auth/EntraSignIn.cs` |
 | 🎫 visitor badge for the assistant | agent pass | `Auth/AgentPass.cs` |
-| 🛂 security desk | the gate | `Auth/ToolGate.cs` (doors: `Controllers/ToolGateController.cs`, `Controllers/McpController.cs`) |
+| 🛂 security desk | the gate | `Auth/ToolGate.cs` (doors: `Controllers/ToolGateController.cs`, `Controllers/McpController.cs`; to the firm's MCP servers: `Auth/UpstreamMcp.cs`) |
 | 📋 the desk's rulebook | decision function | `Auth/Decision.cs`, `Warden.Core/Permissions.cs` |
 | 🎟️ one-time slip handed to the room | forwarded token | `AgentPass.CreateForward` |
 | 📒 badge register | logbook (`delegated_tokens`) | `Domain/DelegatedToken.cs` |
@@ -627,6 +627,38 @@ so the sign-in stays Warden's own.
 - Today the client brings a pass from `/token/exchange`. Step 17 replaces that with the standard
   MCP sign-in (Entra), turned into a pass by Warden itself.
 
+### Behind the door: the firm's own MCP servers (step 18a)
+
+🗣️ **In plain words**
+
+Warden isn't only for Tickmark's tools. A firm connects its own MCP servers (a document store, a
+CRM...) to Warden once. Warden asks each server what tools it has, but an agent only sees a tool
+after the firm's admin has said which permission it needs. A tool a server adds tomorrow stays
+invisible until then. Agents never learn where those servers are or how Warden signs in to them.
+
+🔧 **Technically** (`Auth/UpstreamMcp.cs`, `Auth/ToolGate.cs`, tables `upstream_servers` + `upstream_tools`)
+
+```
+dotnet run --project src/Warden.Api --no-launch-profile -- add-upstream "Firm A" docs https://docs-mcp.firma.example/mcp firm-a-docs
+dotnet run --project src/Warden.Api --no-launch-profile -- assign-tool  "Firm A" docs search documents.read
+```
+
+- `upstream_servers`: firm, name, MCP address, `audience` (the `aud` on Warden's one-minute token to it).
+- `upstream_tools`: the admin's assignments, keyed by (firm, tool name) → server + scope. No row =
+  hidden and refused (`unknown tool`). The key means one tool name per firm, so two servers can't
+  both claim `search`.
+- `tools/list` (`ToolGate.List`): built-in tools + for each of the firm's servers, its own
+  `tools/list` asked live, keeping only tools assigned **on that server** that `DecideTool` allows.
+  The server's own description and input schema are passed on. A server that's down is skipped
+  (logged), the rest of the menu still works.
+- `tools/call`: the same gate (pass → decision → audit log), then MCP `tools/call` to the owning
+  server with `AgentPass.CreateForward(...)` for its audience. Its result goes back to the agent
+  untouched (text, images, `isError`). Down or a JSON-RPC error → `isError` "the tool server did not answer".
+- Warden as an MCP client: one short session per request (`initialize` → `Mcp-Session-Id` →
+  `notifications/initialized` → the request), reads plain JSON or an event stream.
+- The upstream server trusts Warden by checking the token's signature against
+  `/.well-known/jwks.json` and its `aud`. Servers that only take their own API key: not yet.
+
 ---
 
 ## 12. Tickmark behind Warden
@@ -951,6 +983,8 @@ erDiagram
 | `tenants` | an audit firm |
 | `users` | a person at a firm (`active = false` once they leave) |
 | `agents` | a registered AI agent, with `allowed_scopes`: the most it may ever be given |
+| `upstream_servers` | one of a firm's own MCP servers behind Warden |
+| `upstream_tools` | "agents may use this tool of that server, with this scope" (no row = hidden) |
 | `engagements` | one client audit, the unit of access |
 | `members` | "this person works on this job with this role" |
 | `ethical_walls` | "this person must never touch this job" |
@@ -976,7 +1010,7 @@ warden/
     Program.cs                  startup, DI, auth schemes, fallback policy, CLI commands
     Properties/launchSettings.json   dotnet run → Development on :5000
     appsettings.json            defaults (see section 19)
-    Auth/                       DevIssuer, EntraSignIn, WardenSigningKey, AgentPass, Decision, ToolGate
+    Auth/                       DevIssuer, EntraSignIn, WardenSigningKey, AgentPass, Decision, ToolGate, UpstreamMcp
     Controllers/                Health, Me, Jwks, TokenExchange, ToolGate, Mcp, Audit, Revoke, Scim
     Data/                       WardenDbContext, DemoSeed, Migrations/
   tests/Warden.Tests/           xUnit + WebApplicationFactory (WardenFactory)
@@ -1116,6 +1150,7 @@ promise. Every check was also broken on purpose once, to make sure its test real
 | `DecisionTests` | tool rules: scope on pass, no agent export, walls beat the pass, unknown tool |
 | `ToolGateTests` | forwarded with a 60-s token and logged; refusals never forwarded; 502 when down |
 | `McpTests` | MCP: `tools/list` hides what the pass can't do; `tools/call` goes through the gate and is logged; no pass 401; Coke pass refused at Pepsi's address |
+| `UpstreamTests` | a firm's MCP server's tools: hidden until assigned; calls go through the gate with a token for that server and come back as-is; other firms see nothing; server down is skipped |
 | `AuditTests` | UPDATE/DELETE/TRUNCATE refused; allowed + denied logged; per-firm reading |
 | `RevokeTests` | only you revoke your pass; SCIM secret, own firm, only `active` |
 | `EntraTests` | linked Entra account = its Warden user; unlinked / wrong app / other tenant / forged → 401 |
@@ -1269,6 +1304,8 @@ Trade-offs accepted:
 - one Entra tenant; multi-tenant needs per-firm issuer checks
 - SCIM secrets in config; only `active` is synced (no user create/update, no groups)
 - audit reads unpaged; unreadable passes go to the app log only
+- upstream MCP servers: one fresh session per request, first page of `tools/list` only, and they must
+  accept Warden's signed token (no per-server API keys yet); connected by CLI, no admin screen
 - no endpoint to manage memberships and walls yet (they come from `DemoSeed`)
 
 Next (MVP.md Phase 9):
@@ -1277,8 +1314,7 @@ Next (MVP.md Phase 9):
 - **17** MCP sign-in: `/.well-known/oauth-protected-resource` (RFC 9728) → Entra; Warden turns the
   token into a pass per session
 - ~~18~~ done: per-agent `allowed_scopes` (section 10)
-- **18a** Warden in front of any MCP server: tools discovered from each upstream, hidden until an
-  admin assigns a scope
+- ~~18a~~ done: Warden in front of any MCP server (section 11)
 - **18b** Tickmark's tools become one upstream MCP server like any other
 - **19** proof with a stock MCP client (Inspector / Claude Desktop), no Warden code inside it
 - **20** the lock: agents hold no keys, network reaches only Warden

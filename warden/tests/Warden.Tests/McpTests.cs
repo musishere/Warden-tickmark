@@ -66,7 +66,10 @@ public class McpTests : IDisposable
         // Only what this pass may do: documents.read tools. No run_vouch (not on the pass), no export (humans only).
         var tools = (await Result(await Mcp(pass, DemoSeed.Coke, "tools/list"))).GetProperty("tools")
             .EnumerateArray().Select(t => t.GetProperty("name").GetString()).ToList();
-        Assert.Equal(["list_documents", "read_document"], tools);
+        Assert.Contains("list_documents", tools);
+        Assert.Contains("read_document", tools);
+        Assert.DoesNotContain("run_vouch", tools);
+        Assert.DoesNotContain("export_documents", tools);
 
         // Allowed: forwarded with the arguments untouched, the tool's answer comes back as text.
         var ok = await Result(await Mcp(pass, DemoSeed.Coke, "tools/call", new { name = "read_document", arguments = new { name = "inv1.pdf" } }));

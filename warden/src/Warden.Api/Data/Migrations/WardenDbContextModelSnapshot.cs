@@ -254,6 +254,70 @@ namespace Warden.Api.Data.Migrations
                     b.ToTable("tenants", (string)null);
                 });
 
+            modelBuilder.Entity("Warden.Core.Domain.UpstreamServer", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Audience")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("audience");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("name");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<string>("Url")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("url");
+
+                    b.HasKey("Id")
+                        .HasName("pk_upstream_servers");
+
+                    b.HasIndex("TenantId", "Name")
+                        .IsUnique()
+                        .HasDatabaseName("ix_upstream_servers_tenant_id_name");
+
+                    b.ToTable("upstream_servers", (string)null);
+                });
+
+            modelBuilder.Entity("Warden.Core.Domain.UpstreamTool", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<string>("Name")
+                        .HasColumnType("text")
+                        .HasColumnName("name");
+
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("scope");
+
+                    b.Property<Guid>("ServerId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("server_id");
+
+                    b.HasKey("TenantId", "Name")
+                        .HasName("pk_upstream_tools");
+
+                    b.HasIndex("ServerId")
+                        .HasDatabaseName("ix_upstream_tools_server_id");
+
+                    b.ToTable("upstream_tools", (string)null);
+                });
+
             modelBuilder.Entity("Warden.Core.Domain.User", b =>
                 {
                     b.Property<Guid>("Id")
@@ -374,6 +438,33 @@ namespace Warden.Api.Data.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_members_users_user_id");
+                });
+
+            modelBuilder.Entity("Warden.Core.Domain.UpstreamServer", b =>
+                {
+                    b.HasOne("Warden.Core.Domain.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_upstream_servers_tenants_tenant_id");
+                });
+
+            modelBuilder.Entity("Warden.Core.Domain.UpstreamTool", b =>
+                {
+                    b.HasOne("Warden.Core.Domain.UpstreamServer", null)
+                        .WithMany()
+                        .HasForeignKey("ServerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_upstream_tools_upstream_servers_server_id");
+
+                    b.HasOne("Warden.Core.Domain.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_upstream_tools_tenants_tenant_id");
                 });
 
             modelBuilder.Entity("Warden.Core.Domain.User", b =>

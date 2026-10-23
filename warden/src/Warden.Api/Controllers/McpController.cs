@@ -11,7 +11,8 @@
  *   initialize                 -> protocol version + "I offer tools"
  *   notifications/initialized  -> 202, no body (a notification has no id and gets no answer)
  *   ping                       -> {}
- *   tools/list                 -> only the tools this pass may call right now (DecideTool says yes),
+ *   tools/list                 -> ToolGate.List: only the tools this pass may call right now
+ *                                 (built-in + the firm's upstream MCP servers' assigned tools),
  *                                 so export_documents is never listed
  *   tools/call                 -> Auth/ToolGate.cs, exactly like POST /tools/{tool}/invoke:
  *                                 pass -> decision -> audit log -> forward.
@@ -33,7 +34,6 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Warden.Api.Auth;
 using Warden.Api.Data;
-using Warden.Core;
 
 namespace Warden.Api.Controllers;
 
@@ -66,6 +66,8 @@ public class McpController(ToolGate gate, WardenDbContext db, WardenSigningKey k
             var result = await gate.Run(authorization, tool, args, engagement);
             if (result.Status == 401)
                 return Content401(result.Body);
+            if (result.McpResult)  // an upstream MCP server's own result: pass it on untouched
+                return Rpc(id, JsonDocument.Parse(result.Body).RootElement);
             return Rpc(id, new
             {
                 content = new[] { new { type = "text", text = result.Body } },
@@ -95,12 +97,7 @@ public class McpController(ToolGate gate, WardenDbContext db, WardenSigningKey k
                 serverInfo = new { name = "warden", version = "0.1" },
             }),
             "ping" => Rpc(id, new { }),
-            "tools/list" => Rpc(id, new
-            {
-                tools = Permissions.Tools
-                    .Where(t => Decision.DecideTool(db, check.Row, t.Key).Allowed)
-                    .Select(t => new { name = t.Key, description = t.Value.Description, inputSchema = JsonDocument.Parse(t.Value.InputSchema).RootElement }),
-            }),
+            "tools/list" => Rpc(id, new { tools = await gate.List(check.Row) }),
             _ => RpcError(id, -32601, $"method not found: {method}"),
         };
     }

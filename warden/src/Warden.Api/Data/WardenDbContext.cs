@@ -35,6 +35,8 @@ public class WardenDbContext(DbContextOptions<WardenDbContext> options) : DbCont
     public DbSet<EthicalWall> EthicalWalls => Set<EthicalWall>();
     public DbSet<DelegatedToken> DelegatedTokens => Set<DelegatedToken>();
     public DbSet<AuditEntry> AuditLog => Set<AuditEntry>();
+    public DbSet<UpstreamServer> UpstreamServers => Set<UpstreamServer>();
+    public DbSet<UpstreamTool> UpstreamTools => Set<UpstreamTool>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -73,5 +75,15 @@ public class WardenDbContext(DbContextOptions<WardenDbContext> options) : DbCont
         // in the AuditLog migration, not here: EF can't express triggers.
         b.Entity<AuditEntry>().ToTable("audit_log");
         b.Entity<AuditEntry>().HasIndex(a => new { a.TenantId, a.EngagementId });
+
+        // upstream_servers: a firm's own MCP servers (step 18a), one name per firm.
+        b.Entity<UpstreamServer>().HasOne<Tenant>().WithMany().HasForeignKey(u => u.TenantId).OnDelete(DeleteBehavior.Restrict);
+        b.Entity<UpstreamServer>().HasIndex(u => new { u.TenantId, u.Name }).IsUnique();
+
+        // upstream_tools: one row per tool an admin allowed, keyed by (firm, tool name), so two
+        // servers can't both claim the same tool name for one firm.
+        b.Entity<UpstreamTool>().HasKey(t => new { t.TenantId, t.Name });
+        b.Entity<UpstreamTool>().HasOne<Tenant>().WithMany().HasForeignKey(t => t.TenantId).OnDelete(DeleteBehavior.Restrict);
+        b.Entity<UpstreamTool>().HasOne<UpstreamServer>().WithMany().HasForeignKey(t => t.ServerId).OnDelete(DeleteBehavior.Restrict);
     }
 }
