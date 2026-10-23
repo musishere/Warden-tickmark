@@ -68,12 +68,15 @@ if (EntraSignIn.IsConfigured(builder.Configuration))
 builder.Services.AddSingleton<WardenSigningKey>();
 
 // The tool server behind the gate (Tickmark). The gate forwards approved calls here
-// (Controllers/ToolGateController.cs). Tests swap in a fake (WardenFactory.cs).
+// (Auth/ToolGate.cs). Tests swap in a fake (WardenFactory.cs).
 builder.Services.AddHttpClient("tools", c =>
 {
     c.BaseAddress = new Uri(builder.Configuration["Tools:BaseUrl"]!);
     c.Timeout = TimeSpan.FromMinutes(5);  // run_vouch reads every PDF: it can take a while
 });
+
+// The tool gate (Auth/ToolGate.cs). Scoped = one per request, sharing that request's database session.
+builder.Services.AddScoped<ToolGate>();
 
 // Locked by default: every endpoint requires a verified token that says who (oid) and
 // which firm (tid). An endpoint is public only if it says [AllowAnonymous] (like /health).

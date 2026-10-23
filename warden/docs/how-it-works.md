@@ -51,7 +51,7 @@ Postgres triggers, and SCIM deprovisioning. It fails closed everywhere.
 |---|---|---|
 | 🪪 staff ID card | sign-in token (Entra or dev) | `Auth/DevIssuer.cs`, `Auth/EntraSignIn.cs` |
 | 🎫 visitor badge for the assistant | agent pass | `Auth/AgentPass.cs` |
-| 🛂 security desk | the gate | `Controllers/ToolGateController.cs` |
+| 🛂 security desk | the gate | `Auth/ToolGate.cs` (doors: `Controllers/ToolGateController.cs`) |
 | 📋 the desk's rulebook | decision function | `Auth/Decision.cs`, `Warden.Core/Permissions.cs` |
 | 🎟️ one-time slip handed to the room | forwarded token | `AgentPass.CreateForward` |
 | 📒 badge register | logbook (`delegated_tokens`) | `Domain/DelegatedToken.cs` |
@@ -536,7 +536,7 @@ unless all four say yes: is the pass real? does the rulebook allow it? write it 
 call on, not with the agent's pass, but with a fresh one-minute slip that names this one tool.
 If Warden can't write it down, nothing goes through: no record, no access.
 
-🔧 **Technically** (`Controllers/ToolGateController.cs`, `[AllowAnonymous]` because it checks the
+🔧 **Technically** (`Auth/ToolGate.cs`, reached through `Controllers/ToolGateController.cs`, `[AllowAnonymous]` because it checks the
 pass itself)
 
 ```
