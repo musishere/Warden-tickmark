@@ -69,7 +69,7 @@ public static class DemoSeed
             new EthicalWall { EngagementId = Pepsi, UserId = Omar, Reason = "Works on Coke 2026" },
             new EthicalWall { EngagementId = Coke, UserId = Bilal, Reason = "Works on Pepsi 2026" },
 
-            new Agent { Id = Tickmark, Name = "Tickmark" });
+            new Agent { Id = Tickmark, Name = "Tickmark", AllowedScopes = "documents.read vouch.run" });
         db.SaveChanges();
     }
 }

@@ -9,7 +9,8 @@
  *   Decide(...)      "may Tickmark, for Sara, get these scopes on Coke?"
  *                    Used by POST /token/exchange before a pass is stamped.
  *                    Also by GET /audit with no agent (agentId null): Sara herself asking.
- *     1. the agent is registered (skipped when there is no agent)
+ *     1. the agent is registered (skipped when there is no agent), and its registration
+ *        (Agent.AllowedScopes, its ceiling) covers every scope asked for
  *     2. the engagement exists IN THE USER'S FIRM (another firm's looks the same as missing)
  *     3. the user really exists in that firm, and is still active (not deactivated by SCIM)
  *     4. walls:      no ethical wall between user and engagement (beats every role, even Admin)
@@ -19,7 +20,7 @@
  *   DecideTool(...)  "may the holder of this pass call this tool?"
  *                    Used by the tool gate (step 9), after AgentPass.Check says the pass is real.
  *     0. the tool exists
- *     1-6. Decide(...) again, with TODAY's data: a wall or role change made after the pass
+ *     1-6. Decide(...) again, with TODAY's data: a wall, role or agent-registration change made after the pass
  *          was stamped still applies, the pass doesn't freeze old rights
  *     7. tool policy: agents may call this tool at all (export_documents: humans only)
  *     8. scope:       the pass itself carries the scope this tool needs
@@ -41,9 +42,17 @@ public static class Decision
     public static Verdict Decide(WardenDbContext db, Guid tenantId, Guid userId, Guid? agentId,
         Guid engagementId, IReadOnlySet<string> scopes)
     {
-        // 1. the agent, if any, is registered.
-        if (agentId is not null && db.Agents.Find(agentId.Value) is null)
-            return Deny("unknown agent");
+        // 1. the agent, if any, is registered, and was registered for every scope asked for
+        //    (its ceiling: the same for every user it works for).
+        if (agentId is not null)
+        {
+            var agent = db.Agents.Find(agentId.Value);
+            if (agent is null)
+                return Deny("unknown agent");
+            var beyond = scopes.Except(Permissions.Parse(agent.AllowedScopes)).ToList();
+            if (beyond.Count > 0)
+                return Deny($"{agent.Name} is not registered for: {string.Join(' ', beyond)}");
+        }
 
         // 2. the engagement is in the user's own firm. tenantId always comes from a verified
         //    token (sign-in or pass), never from a request body.
@@ -83,7 +92,7 @@ public static class Decision
         if (!Permissions.Tools.TryGetValue(tool, out var rule))
             return Deny($"unknown tool: {tool}");
 
-        // 1-6. walls -> membership -> role, against the data as it is right now.
+        // 1-6. agent ceiling -> walls -> membership -> role, against the data as it is right now.
         var verdict = Decide(db, pass.TenantId, pass.UserId, pass.AgentId, pass.EngagementId,
             new HashSet<string> { rule.Scope });
         if (!verdict.Allowed)

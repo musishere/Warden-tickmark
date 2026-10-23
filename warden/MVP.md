@@ -62,7 +62,13 @@ learns their tools from them. Tickmark is only the demo agent and demo tool serv
 - [ ] 17. MCP sign-in, the standard way: `/.well-known/oauth-protected-resource` (RFC 9728) pointing
   at Entra; 401 + `WWW-Authenticate` when no token; Warden turns the Entra token into a pass
   itself, per session — `mcp_client_without_sign_in_gets_401_with_where_to_sign_in`
-- [ ] 18. Per-agent ceiling: each registered agent gets `allowed_scopes`; a pass is
+- [ ] 17a. Any agent, proven: the agent is who Entra says it is, not who it claims. Each agent is
+  an Entra app registration; Warden reads the client id from the signed token (`azp`) and maps it
+  to a row in `agents` (like `link-entra` does for users). Unknown client id → refused until the
+  firm's admin registers it: `dotnet run -- register-agent "<name>" <entra client id> "<allowed scopes>"`.
+  Token exchange stops trusting the `agent_id` in the request body —
+  `unknown_agent_is_refused_even_with_a_valid_sign_in`
+- [x] 18. Per-agent ceiling: each registered agent gets `allowed_scopes`; a pass is
   agent ceiling ∩ user's rights ∩ what was asked — `agent_cannot_exceed_its_registration`
 - [ ] 18a. Warden in front of any MCP server: the firm's admin connects upstream MCP servers
   (address + how Warden signs in to each; agents never see either). `tools/list` asks each upstream

@@ -29,6 +29,11 @@ namespace Warden.Api.Data.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<string>("AllowedScopes")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("allowed_scopes");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("text")

@@ -143,9 +143,10 @@ public class WardenFactory : WebApplicationFactory<Program>
     }
 
     // A real pass from /token/exchange (fails the test if refused).
-    public async Task<string> Pass(Guid userId, Guid tenantId, Guid engagementId, string scope)
+    // The agent is Tickmark unless a test passes another one (e.g. from NewAgent).
+    public async Task<string> Pass(Guid userId, Guid tenantId, Guid engagementId, string scope, Guid? agentId = null)
     {
-        var res = await Exchange(userId, tenantId, DemoSeed.Tickmark, engagementId, scope);
+        var res = await Exchange(userId, tenantId, agentId ?? DemoSeed.Tickmark, engagementId, scope);
         res.EnsureSuccessStatusCode();
         return (await res.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("access_token").GetString()!;
     }
@@ -158,6 +159,16 @@ public class WardenFactory : WebApplicationFactory<Program>
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", pass);
         return client.PostAsJsonAsync($"/tools/{tool}/invoke", args ?? new { });
     }
+
+    // A new agent registered for `allowedScopes`, made for one test. Used to check the layers
+    // BEHIND the agent's ceiling, e.g. a careless registration that allows documents.export.
+    public Guid NewAgent(string allowedScopes) => WithDb(db =>
+    {
+        var a = new Agent { Name = "Overreach", AllowedScopes = allowedScopes };
+        db.Agents.Add(a);
+        db.SaveChanges();
+        return a.Id;
+    });
 
     // A new active Staff member of Coke at Firm A, made for one test (so deactivating them
     // can't break other tests that use the demo people).

@@ -5,6 +5,7 @@
  *   same pass                       -> run_vouch denied: the pass doesn't carry vouch.run
  *                                      (Sara herself may vouch, she just didn't give the agent that)
  *   Omar (Admin, may export)        -> export_documents denied: agents may never export
+ *   agent's registration narrowed   -> denied at once, even for a pass stamped before
  *   a pass for Pepsi held by Sara   -> denied by the wall, even though the pass "says" Pepsi
  *   a made-up tool                  -> denied
  * (Walls beating Admin and firm isolation are in SecurityGuaranteeTests.)
@@ -39,8 +40,21 @@ public class DecisionTests(WardenFactory warden)
     {
         var pass = SaraReadsCoke();
         pass.UserId = DemoSeed.Omar;  // Admin on Coke: his role allows documents.export
+        pass.AgentId = warden.NewAgent("documents.export");  // a careless registration that allows it too
         pass.Scope = "documents.export";
         Assert.Equal(new Decision.Verdict(false, "export_documents may not be called by an agent"), Tool(pass, "export_documents"));
+    }
+
+    // Narrowing an agent's registration takes effect on passes it ALREADY holds.
+    [Fact]
+    public void agent_registration_is_checked_on_every_call()
+    {
+        var pass = SaraReadsCoke();
+        pass.AgentId = warden.NewAgent("documents.read");
+        Assert.True(Tool(pass, "read_document").Allowed);
+
+        warden.WithDb(db => { db.Agents.Find(pass.AgentId)!.AllowedScopes = ""; return db.SaveChanges(); });
+        Assert.Equal(new Decision.Verdict(false, "Overreach is not registered for: documents.read"), Tool(pass, "read_document"));
     }
 
     [Fact]

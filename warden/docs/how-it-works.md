@@ -144,7 +144,7 @@ migration, so demo people never reach production.
 | Omar | `…000000000003` | Coke Admin + Pepsi Admin; walled from Pepsi |
 | Bilal | `…000000000004` | Pepsi Staff; walled from Coke |
 | Dana | `…000000000005` | Acme Staff (Firm B) |
-| Tickmark | `a9e00000-0000-0000-0000-000000000001` | the registered agent |
+| Tickmark | `a9e00000-0000-0000-0000-000000000001` | the registered agent; allowed `documents.read vouch.run` |
 
 🖼️ **Picture**
 
@@ -448,15 +448,19 @@ flowchart TD
 
 All "may they?" questions are answered in one place, so the pass desk, the gate and the audit
 page can never disagree. It asks a fixed list of questions in order; the first "no" ends it, and
-every answer comes with a reason. Walls come before roles, so a wall beats even an Admin. For tool
+every answer comes with a reason. First: was this agent registered for what it's asking? Each agent
+has a fixed list (its "ceiling"), the same whoever it works for, so even a Manager can't hand
+Tickmark the export permission. Walls come before roles, so a wall beats even an Admin. For tool
 calls it asks two more: may an AI use this tool at all? (export: never), and did Sara put this
-action on the pass? It asks again on every call, using today's data, so a new wall or a lowered
-role applies at the very next call.
+action on the pass? It asks again on every call, using today's data, so a new wall, a lowered
+role or a narrowed agent registration applies at the very next call.
 
 🔧 **Technically** (`Auth/Decision.cs`)
 
 - `Decide(db, tenantId, userId, agentId?, engagementId, scopes)` → `Verdict(Allowed, Reason)`:
   1. agent registered (skipped when `agentId` is null: a person acting for themselves, used by `/audit`)
+     → `unknown agent`; and `scopes ⊆ agent.AllowedScopes` (its ceiling, step 18) →
+     `<agent> is not registered for: <scopes>`
   2. engagement exists **and** `engagement.TenantId == tenantId` → else `engagement not found in your firm`
      (another firm's engagement looks exactly like a missing one)
   3. user exists in that firm → `unknown user`; `Active == false` → `user deactivated`
@@ -474,8 +478,8 @@ role applies at the very next call.
 
 ```mermaid
 flowchart TD
-    Start(["may Tickmark, for Sara,<br/>do this on Coke?"]) --> Q1{"1 agent registered?"}
-    Q1 -->|no| X1["❌ unknown agent"]
+    Start(["may Tickmark, for Sara,<br/>do this on Coke?"]) --> Q1{"1 agent registered,<br/>for these scopes?"}
+    Q1 -->|no| X1["❌ unknown agent /<br/>not registered for ..."]
     Q1 -->|yes| Q2{"2 Coke in Sara's firm?"}
     Q2 -->|no| X2["❌ engagement not found in your firm"]
     Q2 -->|yes| Q3{"3 Sara exists + active?"}
@@ -946,7 +950,7 @@ erDiagram
 |---|---|
 | `tenants` | an audit firm |
 | `users` | a person at a firm (`active = false` once they leave) |
-| `agents` | a registered AI agent |
+| `agents` | a registered AI agent, with `allowed_scopes`: the most it may ever be given |
 | `engagements` | one client audit, the unit of access |
 | `members` | "this person works on this job with this role" |
 | `ethical_walls` | "this person must never touch this job" |
@@ -1261,19 +1265,21 @@ to find and call tools. Then lock agents into a network where Warden is the only
 Trade-offs accepted:
 - one hop + one indexed lookup per tool call (calls are coarse: list, read, a whole vouching run)
 - revocation takes effect at the **next** call, not mid-call
-- the agent only names itself (`agent_id`); agent credentials (client secret / certificate) later
+- the agent only names itself (`agent_id`); step 17a makes Entra prove it (client id in the token)
 - one Entra tenant; multi-tenant needs per-firm issuer checks
 - SCIM secrets in config; only `active` is synced (no user create/update, no groups)
 - audit reads unpaged; unreadable passes go to the app log only
 - no endpoint to manage memberships and walls yet (they come from `DemoSeed`)
-- no per-agent scope ceiling yet: any registered agent may ask for anything within its user's rights
 
 Next (MVP.md Phase 9):
-- **16** `/mcp/engagements/{id}`: Warden speaks MCP (`initialize`, `tools/list` filtered per user +
+- ~~16~~ done: `/mcp/engagements/{id}`: Warden speaks MCP (`initialize`, `tools/list` filtered per user +
   agent, `tools/call` → the existing gate)
 - **17** MCP sign-in: `/.well-known/oauth-protected-resource` (RFC 9728) → Entra; Warden turns the
   token into a pass per session
-- **18** per-agent `allowed_scopes`: pass = agent ceiling ∩ user rights ∩ request
+- ~~18~~ done: per-agent `allowed_scopes` (section 10)
+- **18a** Warden in front of any MCP server: tools discovered from each upstream, hidden until an
+  admin assigns a scope
+- **18b** Tickmark's tools become one upstream MCP server like any other
 - **19** proof with a stock MCP client (Inspector / Claude Desktop), no Warden code inside it
 - **20** the lock: agents hold no keys, network reaches only Warden
 - **21** write-up vs existing MCP gateways and Entra Agent ID
