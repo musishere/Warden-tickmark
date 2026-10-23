@@ -57,21 +57,31 @@ def signing_key(token: str):
     return _jwks.get_signing_key_from_jwt(token).key
 
 
+def warden_claims(authorization: str, what: str) -> dict:
+    """The claims of a Warden-forwarded token, or 401. `what` is only for the log."""
+    token = authorization.removeprefix("Bearer ")
+    try:
+        return jwt.decode(token, signing_key(token), algorithms=["RS256"], issuer="warden",
+                          audience=settings.tools_audience,
+                          options={"require": ["exp", "sub", "act", "tid", "eng", "tool"]})
+    except jwt.PyJWTError as e:  # bad signature, expired, wrong audience, Warden unreachable, ...
+        tools_log.warning("refused %s: not a Warden-forwarded call (%s)", what, e)
+        raise HTTPException(401, "only Warden may call Tickmark's tools") from None
+
+
+def warden_call(authorization: str, tool: str) -> WardenCall:
+    """The request must be a Warden-forwarded call made for exactly `tool`."""
+    c = warden_claims(authorization, tool)
+    if c["tool"] != tool:
+        raise HTTPException(403, f"the token is for {c['tool']}, not {tool}")
+    return WardenCall(UUID(c["tid"]), UUID(c["eng"]), c["sub"], c["act"]["sub"], tool)
+
+
 def from_warden(tool: str) -> Callable[..., WardenCall]:
     """A FastAPI dependency: the request must be a Warden-forwarded call for `tool`."""
 
     def check(authorization: str = Header("")) -> WardenCall:
-        token = authorization.removeprefix("Bearer ")
-        try:
-            c = jwt.decode(token, signing_key(token), algorithms=["RS256"], issuer="warden",
-                           audience=settings.tools_audience,
-                           options={"require": ["exp", "sub", "act", "tid", "eng", "tool"]})
-        except jwt.PyJWTError as e:  # bad signature, expired, wrong audience, Warden unreachable, ...
-            tools_log.warning("refused %s: not a Warden-forwarded call (%s)", tool, e)
-            raise HTTPException(401, "only Warden may call Tickmark's tools") from None
-        if c["tool"] != tool:
-            raise HTTPException(403, f"the token is for {c['tool']}, not {tool}")
-        return WardenCall(UUID(c["tid"]), UUID(c["eng"]), c["sub"], c["act"]["sub"], tool)
+        return warden_call(authorization, tool)
 
     return check
 

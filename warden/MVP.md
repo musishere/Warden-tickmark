@@ -79,6 +79,9 @@ learns their tools from them. Tickmark is only the demo agent and demo tool serv
 - [ ] 18b. Tickmark's tools become one MCP server behind Warden, like any other. Remove the
   hand-written `Permissions.Tools` menu, `Tools:BaseUrl` and the plain-HTTP forward path, so every
   tool takes the same route — `tickmark_tools_work_as_an_upstream_mcp_server`
+  - [x] 18b-1. Tickmark serves its tools over MCP at `/mcp` (`tickmark/src/tickmark/api/mcp.py`) —
+    `tickmark/tests/test_mcp.py`
+  - [ ] 18b-2. Warden drops the built-in list and plain-HTTP path; Tickmark is seeded as Firm A's upstream
 - [ ] 19. Proof with a stock client: MCP Inspector (or Claude Desktop) pointed at Warden, no Warden
   code: Coke works, Pepsi refused, export not offered, all in the audit log. Tickmark drops
   `warden_client.py` and uses a plain MCP client. A second, non-Tickmark MCP server behind Warden

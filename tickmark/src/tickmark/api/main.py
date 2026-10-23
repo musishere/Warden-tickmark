@@ -4,7 +4,7 @@ upload sample + PDFs -> settle the column meanings (known names, LLM suggestion,
 (PDFs read locally, Azure only where needed) -> verdicts, how each PDF was read, and the run's log.
 Saving to the audit trail is optional (a firm + engagement). The firm and engagement come from the
 request here: a local stand-in. In production they come from the Warden-verified token. No auth.
-The agent's tools under /tools/* are different: only Warden may call them (api/tools.py).
+The agent's tools under /tools/* and /mcp are different: only Warden may call them (api/tools.py, api/mcp.py).
 """
 import json
 from pathlib import Path
@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from sqlalchemy.exc import OperationalError
 
 from tickmark import log
-from tickmark.api import jobs, tools, workspace
+from tickmark.api import jobs, mcp, tools, workspace
 from tickmark.config import settings
 from tickmark.definitions import INVOICE_VOUCHING
 from tickmark.fields.mapping import ColumnMapping, Meaning, headers_sha256, validate
@@ -34,6 +34,7 @@ app.state.db = None  # the app's database engine; tests point it at a throw-away
 app.state.admin_db = None
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 app.include_router(tools.router)  # /tools/*: only Warden-forwarded calls (api/tools.py)
+app.include_router(mcp.router)  # /mcp: the same tools as an MCP server, for Warden (api/mcp.py)
 
 
 @app.exception_handler(OperationalError)

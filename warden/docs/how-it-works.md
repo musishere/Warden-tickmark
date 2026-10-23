@@ -680,6 +680,13 @@ no, or doesn't answer, it stops.
   token's `eng`, never the body. Files: `<engagements_dir>/<eng>/sample.xlsx` + `invoices/*.pdf`;
   names go through `Path(name).name` (no `../`). `run_vouch` runs Tickmark's pipeline with Azure off.
   There is no export endpoint.
+- `src/tickmark/api/mcp.py` (step 18b): the same three tools as an **MCP server**, `POST /mcp`,
+  so Warden can reach Tickmark like any firm's MCP server. `initialize`, `tools/list` (descriptions
+  + input schemas, from the tools' own request models), `tools/call` → the tool's JSON as text;
+  a tool error (no such document, bad period, wrong arguments) → `isError: true`. Every message
+  needs a Warden-forwarded token (`warden_claims`); `tools/call` only runs the tool the token names
+  (`warden_call`, else **403**). Stateless: no session id. Until step 18b's second half, Warden
+  still calls `/tools/*` over plain HTTP.
 - `src/tickmark/warden_client.py`: `exchange_token(scope, resource)` and `invoke(tool, payload)`;
   any non-200 or network error → `WardenDenied`.
 - `src/tickmark/agent.py` (`make agent TOKEN=… [ENG=…]`): exchange `documents.read vouch.run` →
