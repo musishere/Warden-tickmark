@@ -51,7 +51,7 @@ Postgres triggers, and SCIM deprovisioning. It fails closed everywhere.
 |---|---|---|
 | 🪪 staff ID card | sign-in token (Entra or dev) | `Auth/DevIssuer.cs`, `Auth/EntraSignIn.cs` |
 | 🎫 visitor badge for the assistant | agent pass | `Auth/AgentPass.cs` |
-| 🛂 security desk | the gate | `Auth/ToolGate.cs` (doors: `Controllers/ToolGateController.cs`) |
+| 🛂 security desk | the gate | `Auth/ToolGate.cs` (doors: `Controllers/ToolGateController.cs`, `Controllers/McpController.cs`) |
 | 📋 the desk's rulebook | decision function | `Auth/Decision.cs`, `Warden.Core/Permissions.cs` |
 | 🎟️ one-time slip handed to the room | forwarded token | `AgentPass.CreateForward` |
 | 📒 badge register | logbook (`delegated_tokens`) | `Domain/DelegatedToken.cs` |
@@ -583,6 +583,46 @@ flowchart LR
 **Why a separate token to the tool?** If Warden forwarded the agent's own pass, the agent could
 send that same pass straight to the tool and skip Warden.
 
+### The MCP door: any agent, no Warden code (step 16)
+
+🗣️ **In plain words**
+
+MCP is the common language off-the-shelf agents use to find and call tools. Warden speaks it, so
+any MCP agent can use Coke's tools by changing one setting: its tool server address, which becomes
+Warden's Coke address. Behind that door is the same gate, the same four steps. The agent only ever
+sees the tools it's allowed to use: export isn't even on the menu.
+
+🔧 **Technically** (`Controllers/McpController.cs`)
+
+```
+POST /mcp/engagements/{engagement id}
+Authorization: Bearer <pass>
+{ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "read_document", "arguments": { "name": "inv1.pdf" } } }
+```
+
+JSON-RPC 2.0, one message per POST, answered with plain JSON (MCP's "Streamable HTTP" transport
+without streaming: Warden has nothing to push). Hand-written (about 100 lines), no MCP library,
+so the sign-in stays Warden's own.
+
+| Method | Answer |
+|---|---|
+| `initialize` | the client's protocol version if Warden knows it (`2025-03-26`, `2025-06-18`, `2025-11-25`), else the newest; `capabilities: { tools }` |
+| `notifications/initialized` (no `id`) | 202, no body |
+| `ping` | `{}` |
+| `tools/list` | the tools `Decision.DecideTool` allows for this pass right now, with description + input schema from `Permissions.Tools`. Export is never listed |
+| `tools/call` | `ToolGate.Run(..., engagement)`. Allowed → the tool's answer as `content[0].text`. Refused / tool down → same, with `isError: true`, so the agent's model reads the reason |
+| anything else | JSON-RPC error `-32601` |
+
+- Every message needs a valid pass, even `initialize` (fail closed). No pass / bad pass → HTTP
+  **401** with `WWW-Authenticate: Bearer`.
+- The engagement in the address can only narrow the pass: a Coke pass at Pepsi's address is
+  refused (`pass is for a different engagement`), as **403** for `tools/list`, and as a **logged**
+  `isError` result for `tools/call`.
+- Listing tools isn't an action, so `tools/list` isn't written to the audit log; every
+  `tools/call` is, exactly like `POST /tools/{tool}/invoke`.
+- Today the client brings a pass from `/token/exchange`. Step 17 replaces that with the standard
+  MCP sign-in (Entra), turned into a pass by Warden itself.
+
 ---
 
 ## 12. Tickmark behind Warden
@@ -932,8 +972,8 @@ warden/
     Program.cs                  startup, DI, auth schemes, fallback policy, CLI commands
     Properties/launchSettings.json   dotnet run → Development on :5000
     appsettings.json            defaults (see section 19)
-    Auth/                       DevIssuer, EntraSignIn, WardenSigningKey, AgentPass, Decision
-    Controllers/                Health, Me, Jwks, TokenExchange, ToolGate, Audit, Revoke, Scim
+    Auth/                       DevIssuer, EntraSignIn, WardenSigningKey, AgentPass, Decision, ToolGate
+    Controllers/                Health, Me, Jwks, TokenExchange, ToolGate, Mcp, Audit, Revoke, Scim
     Data/                       WardenDbContext, DemoSeed, Migrations/
   tests/Warden.Tests/           xUnit + WebApplicationFactory (WardenFactory)
 ```
@@ -1071,6 +1111,7 @@ promise. Every check was also broken on purpose once, to make sure its test real
 | `PassCheckTests` | tampered, forged, sign-in token, unlogged, revoked refused |
 | `DecisionTests` | tool rules: scope on pass, no agent export, walls beat the pass, unknown tool |
 | `ToolGateTests` | forwarded with a 60-s token and logged; refusals never forwarded; 502 when down |
+| `McpTests` | MCP: `tools/list` hides what the pass can't do; `tools/call` goes through the gate and is logged; no pass 401; Coke pass refused at Pepsi's address |
 | `AuditTests` | UPDATE/DELETE/TRUNCATE refused; allowed + denied logged; per-firm reading |
 | `RevokeTests` | only you revoke your pass; SCIM secret, own firm, only `active` |
 | `EntraTests` | linked Entra account = its Warden user; unlinked / wrong app / other tenant / forged → 401 |

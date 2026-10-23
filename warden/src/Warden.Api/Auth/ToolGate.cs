@@ -3,7 +3,7 @@
  *
  * Two doors lead here, and both call Run(...), so neither can skip a step:
  *   POST /tools/{tool}/invoke      (Controllers/ToolGateController.cs, plain HTTP)
- *   /mcp/engagements/{id}          (MCP tools/call, step 16)
+ *   /mcp/engagements/{id}          (Controllers/McpController.cs, MCP tools/call)
  *
  * In order. Nothing is forwarded unless every step says yes:
  *   1. check the pass (AgentPass.Check): Warden's signature, iss, aud = warden-tools, not
@@ -44,7 +44,9 @@ public class ToolGate(WardenDbContext db, WardenSigningKey key, IHttpClientFacto
     public record Result(int Status, string Body, string ContentType = "application/json");
 
     // authorization = the request's Authorization header, as sent ("Bearer <pass>").
-    public async Task<Result> Run(string authorization, string tool, JsonElement args)
+    // engagement = the engagement the caller's address is for (MCP's /mcp/engagements/{id}), if any:
+    //   it can only narrow the pass, never widen it. A mismatch is a logged "no".
+    public async Task<Result> Run(string authorization, string tool, JsonElement args, Guid? engagement = null)
     {
         // 1. the pass.
         if (!authorization.StartsWith("Bearer "))
@@ -57,8 +59,10 @@ public class ToolGate(WardenDbContext db, WardenSigningKey key, IHttpClientFacto
         }
         var pass = check.Row;
 
-        // 2. the decision (a revoked pass is already a "no").
-        var verdict = check.Ok ? Decision.DecideTool(db, pass, tool) : new Decision.Verdict(false, check.Reason!);
+        // 2. the decision (a revoked pass, or a pass used at another engagement's address, is already a "no").
+        var verdict = !check.Ok ? new Decision.Verdict(false, check.Reason!)
+            : engagement is not null && engagement != pass.EngagementId ? new Decision.Verdict(false, WrongEngagement)
+            : Decision.DecideTool(db, pass, tool);
 
         // 3. the audit log, before anything is forwarded.
         Permissions.Tools.TryGetValue(tool, out var rule);
@@ -91,6 +95,8 @@ public class ToolGate(WardenDbContext db, WardenSigningKey key, IHttpClientFacto
             return Error(502, "tool_unavailable", "the tool server did not answer");
         }
     }
+
+    public const string WrongEngagement = "pass is for a different engagement";
 
     static Result InvalidToken(string reason) => Error(401, "invalid_token", reason);
 

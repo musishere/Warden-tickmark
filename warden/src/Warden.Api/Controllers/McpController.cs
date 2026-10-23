@@ -1,0 +1,118 @@
+/*
+ * McpController.cs — /mcp/engagements/{id}: the MCP door to the tool gate (step 16).
+ *
+ * MCP (Model Context Protocol) is how off-the-shelf agents find and call tools. Point any MCP
+ * client at this address and it gets Coke's tools, through Warden, with no Warden code inside it.
+ * One address per engagement, so "which client" is part of the address.
+ *
+ * Messages are JSON-RPC 2.0, one per POST ("Streamable HTTP", answered with plain JSON):
+ *   { "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": ..., "arguments": {...} } }
+ *
+ *   initialize                 -> protocol version + "I offer tools"
+ *   notifications/initialized  -> 202, no body (a notification has no id and gets no answer)
+ *   ping                       -> {}
+ *   tools/list                 -> only the tools this pass may call right now (DecideTool says yes),
+ *                                 so export_documents is never listed
+ *   tools/call                 -> Auth/ToolGate.cs, exactly like POST /tools/{tool}/invoke:
+ *                                 pass -> decision -> audit log -> forward.
+ *                                 Allowed -> the tool's answer as text. Refused -> isError: true +
+ *                                 the reason, so the agent's model reads why ("ethical wall: ...").
+ *   anything else              -> JSON-RPC error -32601 "method not found"
+ *
+ * Sign-in: every message needs "Authorization: Bearer <agent pass>" (fail closed: even
+ * initialize). Bad pass -> HTTP 401. A pass for another engagement -> refused (403, or a logged
+ * isError for tools/call). Step 17 swaps the pass for an Entra sign-in Warden turns into a pass itself.
+ *
+ * C# notes:
+ *   JsonElement — a read-only view of parsed JSON (like a Python dict from json.loads, but typed).
+ *   TryGetProperty(name, out var x) — "if the key is there, put it in x and return true".
+ *   {engagement:guid} — the route only matches if that part of the URL is a GUID.
+ */
+using System.Text.Json;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Warden.Api.Auth;
+using Warden.Api.Data;
+using Warden.Core;
+
+namespace Warden.Api.Controllers;
+
+[ApiController]
+[Route("mcp/engagements/{engagement:guid}")]
+[AllowAnonymous]  // takes an agent PASS, checked below / by the gate, not a sign-in token
+public class McpController(ToolGate gate, WardenDbContext db, WardenSigningKey key) : ControllerBase
+{
+    // MCP versions we answer with. A client asking for one of these gets it; otherwise our newest.
+    static readonly string[] Versions = ["2025-11-25", "2025-06-18", "2025-03-26"];
+
+    static readonly JsonElement NoArgs = JsonDocument.Parse("{}").RootElement;
+
+    [HttpPost]
+    public async Task<IActionResult> Post(Guid engagement, [FromBody] JsonElement msg)
+    {
+        if (msg.ValueKind != JsonValueKind.Object || !msg.TryGetProperty("method", out var m) || m.ValueKind != JsonValueKind.String)
+            return RpcError(null, -32600, "invalid request");
+        var method = m.GetString()!;
+        var id = msg.TryGetProperty("id", out var i) ? i : (JsonElement?)null;
+        var @params = msg.TryGetProperty("params", out var p) && p.ValueKind == JsonValueKind.Object ? p : NoArgs;
+        var authorization = Request.Headers.Authorization.ToString();
+
+        // tools/call goes straight to the gate: it checks the pass itself and logs every
+        // refusal (revoked, wrong engagement...) under the right firm.
+        if (method == "tools/call")
+        {
+            var tool = @params.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String ? n.GetString()! : "";
+            var args = @params.TryGetProperty("arguments", out var a) && a.ValueKind == JsonValueKind.Object ? a : NoArgs;
+            var result = await gate.Run(authorization, tool, args, engagement);
+            if (result.Status == 401)
+                return Content401(result.Body);
+            return Rpc(id, new
+            {
+                content = new[] { new { type = "text", text = result.Body } },
+                isError = result.Status is < 200 or >= 300,
+            });
+        }
+
+        // Everything else: a real, current pass for THIS engagement first.
+        var check = authorization.StartsWith("Bearer ")
+            ? await AgentPass.Check(authorization["Bearer ".Length..], key, db)
+            : new AgentPass.CheckResult(false, "no pass", null);
+        if (!check.Ok)
+            return Content401(JsonSerializer.Serialize(new { error = "invalid_token", reason = check.Reason }));
+        if (check.Row!.EngagementId != engagement)
+            return StatusCode(403, new { error = "access_denied", reason = ToolGate.WrongEngagement });
+
+        if (id is null)  // a notification (e.g. notifications/initialized): nothing to answer
+            return StatusCode(202);
+
+        return method switch
+        {
+            "initialize" => Rpc(id, new
+            {
+                protocolVersion = @params.TryGetProperty("protocolVersion", out var v) && Versions.Contains(v.GetString())
+                    ? v.GetString() : Versions[0],
+                capabilities = new { tools = new { } },
+                serverInfo = new { name = "warden", version = "0.1" },
+            }),
+            "ping" => Rpc(id, new { }),
+            "tools/list" => Rpc(id, new
+            {
+                tools = Permissions.Tools
+                    .Where(t => Decision.DecideTool(db, check.Row, t.Key).Allowed)
+                    .Select(t => new { name = t.Key, description = t.Value.Description, inputSchema = JsonDocument.Parse(t.Value.InputSchema).RootElement }),
+            }),
+            _ => RpcError(id, -32601, $"method not found: {method}"),
+        };
+    }
+
+    IActionResult Rpc(JsonElement? id, object result) => Ok(new { jsonrpc = "2.0", id, result });
+
+    IActionResult RpcError(JsonElement? id, int code, string message) => Ok(new { jsonrpc = "2.0", id, error = new { code, message } });
+
+    // 401 with WWW-Authenticate: the standard "you need a (valid) bearer token" answer.
+    IActionResult Content401(string body)
+    {
+        Response.Headers.WWWAuthenticate = "Bearer";
+        return new ContentResult { StatusCode = 401, Content = body, ContentType = "application/json" };
+    }
+}

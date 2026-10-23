@@ -36,14 +36,25 @@ public static class Permissions
     // Tool policy: which scope each tool needs, and whether an agent may call it at all.
     // export_documents is humans only: even if a prompt injection tells the agent to
     // export everything, Warden says no (step 10 builds the tools themselves).
-    public record ToolRule(string Scope, bool AgentsAllowed);
+    // Description + InputSchema (JSON Schema, as text) are what MCP clients see in tools/list (step 16):
+    // the agent's model reads them to decide when and how to call the tool.
+    public record ToolRule(string Scope, bool AgentsAllowed, string Description, string InputSchema);
+
+    // """...""" is a C# raw string: the JSON inside needs no escaping.
+    const string NoArgs = """{"type":"object","properties":{}}""";
 
     public static readonly IReadOnlyDictionary<string, ToolRule> Tools = new Dictionary<string, ToolRule>
     {
-        ["list_documents"] = new(DocumentsRead, AgentsAllowed: true),
-        ["read_document"] = new(DocumentsRead, AgentsAllowed: true),
-        ["run_vouch"] = new(VouchRun, AgentsAllowed: true),
-        ["export_documents"] = new(DocumentsExport, AgentsAllowed: false),
+        ["list_documents"] = new(DocumentsRead, AgentsAllowed: true,
+            "List the documents (invoices) in this engagement's folder.", NoArgs),
+        ["read_document"] = new(DocumentsRead, AgentsAllowed: true,
+            "Read one document from this engagement's folder.",
+            """{"type":"object","properties":{"name":{"type":"string","description":"file name from list_documents, e.g. inv1.pdf"}},"required":["name"]}"""),
+        ["run_vouch"] = new(VouchRun, AgentsAllowed: true,
+            "Vouch this engagement's ledger against its invoices and return the findings.",
+            """{"type":"object","properties":{"period":{"type":"string","description":"optional, YYYY-MM-DD:YYYY-MM-DD"},"currency":{"type":"string","description":"optional, e.g. USD"}}}"""),
+        ["export_documents"] = new(DocumentsExport, AgentsAllowed: false,
+            "Export every document in the engagement (humans only).", NoArgs),
     };
 
     // "documents.read  vouch.run" -> { "documents.read", "vouch.run" }
