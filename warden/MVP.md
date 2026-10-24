@@ -92,6 +92,12 @@ learns their tools from them. Tickmark is only the demo agent and demo tool serv
   code: Coke works, Pepsi refused, export not offered, all in the audit log. Tickmark drops
   `warden_client.py` and uses a plain MCP client. A second, non-Tickmark MCP server behind Warden
   shows it isn't Tickmark-specific
+  - [x] 19-1. Claude Code (stock, `--client-id`) signs in at Microsoft's real page through Warden's
+    front door (`OAuthFrontDoorController`: Entra refuses MCP's `resource`, AADSTS9010010), then:
+    Coke list + vouch ✅, export not offered ✅, Pepsi 403 `ethical wall` ✅, all logged as agent
+    "Claude Code" (from the token's `azp`) — `sign_in_goes_on_to_entra_without_the_resource_entra_refuses`
+  - [ ] 19-2. Tickmark's agent uses a plain MCP client instead of `warden_client.py`
+  - [ ] 19-3. A second, non-Tickmark MCP server behind Warden
 - [ ] 20. The lock: agents hold no keys and can only reach Warden (Azure Container Apps network
   rules); Warden holds the keys to the real systems — `agent_container_cannot_reach_tools_directly`
 - [ ] 21. Write-up in docs/how-it-works.md: "integrating any agent without code changes", how Warden compares with

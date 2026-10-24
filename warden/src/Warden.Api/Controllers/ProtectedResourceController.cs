@@ -6,10 +6,11 @@
  *      resource_metadata="https://warden/.well-known/oauth-protected-resource/mcp/engagements/{id}"
  *   2. it reads that (this file):
  *        { "resource": "https://warden/mcp/engagements/{id}",
- *          "authorization_servers": ["https://login.microsoftonline.com/<tenant>/v2.0"],
+ *          "authorization_servers": ["https://warden"],
  *          "scopes_supported": ["api://<Warden's client id>/access_as_user"] }
- *   3. it opens Microsoft's sign-in page (Entra is the authorization server, not Warden), the user
- *      signs in, and the client gets an Entra token for Warden (aud = Warden's app, azp = the agent's app)
+ *   3. it signs in through Warden's front door (OAuthFrontDoorController.cs), which hands it straight
+ *      on to Microsoft's own sign-in page; the user signs in, and the client gets an Entra token for
+ *      Warden (aud = Warden's app, azp = the agent's app)
  *   4. it calls /mcp again with that token; Warden makes the pass itself (McpController, Delegation.cs)
  *
  * The path after oauth-protected-resource is the address it describes (RFC 9728 section 3.1);
@@ -35,7 +36,7 @@ public class ProtectedResourceController(IConfiguration config) : ControllerBase
         return Ok(new
         {
             resource = $"{Request.Scheme}://{Request.Host}/{path}".TrimEnd('/'),
-            authorization_servers = new[] { EntraSignIn.AuthorizationServer(config) },
+            authorization_servers = new[] { OAuthFrontDoorController.Issuer(Request) },
             scopes_supported = new[] { $"api://{config["Entra:ClientId"]}/{EntraSignIn.McpScope}" },
             bearer_methods_supported = new[] { "header" },
             resource_name = "Warden",

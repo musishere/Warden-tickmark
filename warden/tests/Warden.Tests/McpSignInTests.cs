@@ -3,7 +3,9 @@
  * and Warden does the rest. The agent never asks for, or sees, a pass.
  *
  *   no token                          -> 401 + WWW-Authenticate: Bearer resource_metadata="..."
- *                                        -> that document names Entra and the scope to ask for
+ *                                        -> that document names Warden's front door and the scope to ask for
+ *   signing in through the front door -> on to Entra's real page and token endpoint, minus `resource`
+ *                                        (Entra refuses it: AADSTS9010010)
  *   Entra sign-in (azp = Tickmark)    -> works: Warden makes ONE pass for the session, reuses it,
  *                                        and its scopes are Tickmark's ceiling ∩ the user's role
  *   that pass revoked                 -> the same sign-in is refused from then on
@@ -57,8 +59,37 @@ public class McpSignInTests : IDisposable
 
         var meta = await warden.CreateClient().GetFromJsonAsync<JsonElement>(where);
         Assert.Equal($"http://localhost/mcp/engagements/{DemoSeed.Coke}", meta.GetProperty("resource").GetString());
-        Assert.Equal($"https://login.microsoftonline.com/{WardenFactory.FakeEntraTenant}/v2.0", meta.GetProperty("authorization_servers")[0].GetString());
+        Assert.Equal("http://localhost", meta.GetProperty("authorization_servers")[0].GetString());
         Assert.Equal($"api://{WardenFactory.FakeEntraClient}/access_as_user", meta.GetProperty("scopes_supported")[0].GetString());
+    }
+
+    [Fact]
+    public async Task sign_in_goes_on_to_entra_without_the_resource_entra_refuses()
+    {
+        var client = warden.CreateClient(new() { AllowAutoRedirect = false });
+        var door = await client.GetFromJsonAsync<JsonElement>("/.well-known/oauth-authorization-server");
+        Assert.Equal("http://localhost/oauth/authorize", door.GetProperty("authorization_endpoint").GetString());
+
+        // The browser goes on to Microsoft's own page, with everything but `resource`.
+        var go = await client.GetAsync("/oauth/authorize?response_type=code&client_id=agent&code_challenge=abc&code_challenge_method=S256" +
+            "&redirect_uri=http%3A%2F%2Flocalhost%3A7777%2Fcallback&state=s1&scope=api%3A%2F%2Fx%2Faccess_as_user&resource=http%3A%2F%2Flocalhost%2Fmcp");
+        Assert.Equal(HttpStatusCode.Redirect, go.StatusCode);
+        var to = go.Headers.Location!.ToString();
+        Assert.StartsWith($"https://login.microsoftonline.com/{WardenFactory.FakeEntraTenant}/oauth2/v2.0/authorize?", to);
+        Assert.Contains("code_challenge=abc", to);
+        Assert.Contains("state=s1", to);
+        Assert.DoesNotContain("resource=", to);
+
+        // The code goes on to Entra's token endpoint, also minus `resource`; Entra's answer comes back as-is.
+        var token = await client.PostAsync("/oauth/token", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["grant_type"] = "authorization_code", ["code"] = "c1", ["code_verifier"] = "v1", ["client_id"] = "agent", ["resource"] = "http://localhost/mcp",
+        }));
+        Assert.Equal("from-entra", (await token.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("access_token").GetString());
+        var (url, form) = warden.EntraTokens.Last!.Value;
+        Assert.Equal($"https://login.microsoftonline.com/{WardenFactory.FakeEntraTenant}/oauth2/v2.0/token", url.ToString());
+        Assert.Contains("code_verifier=v1", form);
+        Assert.DoesNotContain("resource", form);
     }
 
     [Fact]

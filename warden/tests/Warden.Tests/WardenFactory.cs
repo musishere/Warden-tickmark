@@ -49,6 +49,7 @@ public class WardenFactory : WebApplicationFactory<Program>
     public const string TestDb = "Host=localhost;Port=5433;Database=warden_test;Username=warden;Password=warden";
 
     public FakeUpstream Upstream { get; } = new();
+    public FakeEntraTokens EntraTokens { get; } = new();
     public const string ScimSecret = "firm-a-scim-secret-for-tests";
     public static readonly Guid FakeEntraTenant = Guid.Parse("e17a0000-0000-0000-0000-000000000001");
     public const string FakeEntraClient = "warden-test-api";
@@ -82,6 +83,7 @@ public class WardenFactory : WebApplicationFactory<Program>
         builder.ConfigureTestServices(s =>
         {
             s.AddHttpClient("upstream").ConfigurePrimaryHttpMessageHandler(() => Upstream);
+            s.AddHttpClient("entra").ConfigurePrimaryHttpMessageHandler(() => EntraTokens);
             s.PostConfigure<JwtBearerOptions>(EntraSignIn.Scheme, o => o.ConfigurationManager =
                 new StaticConfigurationManager<OpenIdConnectConfiguration>(new OpenIdConnectConfiguration { SigningKeys = { FakeEntraKey } }));
         });
@@ -273,4 +275,17 @@ public class FakeUpstream : HttpMessageHandler
     {
         Content = JsonContent.Create(new { jsonrpc = "2.0", id = msg.GetProperty("id"), result }),
     };
+}
+
+// Stands in for Entra's token endpoint (OAuthFrontDoorController forwards there): remembers what it
+// was sent and answers like Entra would.
+public class FakeEntraTokens : HttpMessageHandler
+{
+    public (Uri Url, string Form)? Last { get; private set; }
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        Last = (request.RequestUri!, await request.Content!.ReadAsStringAsync(ct));
+        return new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(new { access_token = "from-entra", token_type = "Bearer" }) };
+    }
 }

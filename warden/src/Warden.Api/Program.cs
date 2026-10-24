@@ -75,6 +75,10 @@ builder.Services.AddSingleton<WardenSigningKey>();
 // every PDF, it can take a while.
 builder.Services.AddHttpClient("upstream", c => c.Timeout = TimeSpan.FromMinutes(5));
 
+// Entra's token endpoint, for MCP clients signing in through Warden's front door
+// (Controllers/OAuthFrontDoorController.cs). Tests swap in a fake.
+builder.Services.AddHttpClient("entra");
+
 // The tool gate (Auth/ToolGate.cs). Scoped = one per request, sharing that request's database session.
 builder.Services.AddScoped<ToolGate>();
 

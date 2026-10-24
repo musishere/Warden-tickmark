@@ -636,9 +636,12 @@ so the sign-in stays Warden's own.
   1. no token → **401** `WWW-Authenticate: Bearer resource_metadata="<host>/.well-known/oauth-protected-resource/mcp/engagements/{id}"`
      (only when Entra is set up; else plain `Bearer`)
   2. that document (RFC 9728, `ProtectedResourceController`): `resource` = this address,
-     `authorization_servers` = `https://login.microsoftonline.com/<tenant>/v2.0`,
-     `scopes_supported` = `api://<Warden's client id>/access_as_user`
-  3. the client opens Microsoft's sign-in page and gets an Entra token: `aud` Warden, `azp` the agent's app
+     `authorization_servers` = Warden itself, `scopes_supported` = `api://<Warden's client id>/access_as_user`
+  3. the client signs in through Warden's front door (`OAuthFrontDoorController`, RFC 8414 metadata at
+     `/.well-known/oauth-authorization-server`): `/oauth/authorize` → 302 to Microsoft's real page,
+     `/oauth/token` → posted on to Entra's token endpoint, both **without `resource`**. MCP clients
+     send `resource` = the MCP address and Entra refuses it (`AADSTS9010010`). Microsoft still signs
+     the user in and issues the token: `aud` Warden, `azp` the agent's app
   4. with that token, `Delegation.ForSession`: the pass for (this sign-in's `uti`/`jti`, this
      engagement) is reused, or made: agent = `azp` → `agents`, scopes = agent ceiling ∩ the user's
      role here, `Decide` + audit (`token.exchange`) + logbook row with `sign_in_id`. Refused →
