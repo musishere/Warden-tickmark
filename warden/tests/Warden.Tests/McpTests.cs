@@ -26,10 +26,10 @@ public class McpTests : IDisposable
     public McpTests(WardenFactory warden)
     {
         this.warden = warden;
-        warden.Tools.Reset();
+        warden.Upstream.Reset();
     }
 
-    public void Dispose() => warden.Tools.Reset();
+    public void Dispose() => warden.Upstream.Reset();
 
     // What an MCP client sends: one JSON-RPC message, POSTed to the engagement's MCP address.
     Task<HttpResponseMessage> Mcp(string? pass, Guid engagement, string method, object? @params = null)
@@ -63,7 +63,7 @@ public class McpTests : IDisposable
         Assert.Equal("2025-06-18", init.GetProperty("protocolVersion").GetString());
         Assert.True(init.GetProperty("capabilities").TryGetProperty("tools", out _));
 
-        // Only what this pass may do: documents.read tools. No run_vouch (not on the pass), no export (humans only).
+        // Only what this pass may do: documents.read tools. No run_vouch (not on the pass), no export (never assigned).
         var tools = (await Result(await Mcp(pass, DemoSeed.Coke, "tools/list"))).GetProperty("tools")
             .EnumerateArray().Select(t => t.GetProperty("name").GetString()).ToList();
         Assert.Contains("list_documents", tools);
@@ -74,16 +74,16 @@ public class McpTests : IDisposable
         // Allowed: forwarded with the arguments untouched, the tool's answer comes back as text.
         var ok = await Result(await Mcp(pass, DemoSeed.Coke, "tools/call", new { name = "read_document", arguments = new { name = "inv1.pdf" } }));
         Assert.False(ok.GetProperty("isError").GetBoolean());
-        Assert.Contains("\"ok\":true", ok.GetProperty("content")[0].GetProperty("text").GetString());
-        Assert.Equal("""{"name":"inv1.pdf"}""", warden.Tools.LastBody);
+        Assert.Equal("called read_document", ok.GetProperty("content")[0].GetProperty("text").GetString());
+        Assert.Equal("""{"name":"inv1.pdf"}""", warden.Upstream.Calls.Single().Body);
         Assert.True(Audited(pass, "read_document").Allowed);
 
         // Refused: the agent is told why, nothing is forwarded, and it's in the audit log.
-        warden.Tools.Reset();
+        warden.Upstream.Reset();
         var no = await Result(await Mcp(pass, DemoSeed.Coke, "tools/call", new { name = "export_documents" }));
         Assert.True(no.GetProperty("isError").GetBoolean());
-        Assert.Contains("access_denied", no.GetProperty("content")[0].GetProperty("text").GetString());
-        Assert.Null(warden.Tools.Last);
+        Assert.Contains("unknown tool: export_documents", no.GetProperty("content")[0].GetProperty("text").GetString());
+        Assert.Empty(warden.Upstream.Calls);
         Assert.False(Audited(pass, "export_documents").Allowed);
     }
 
@@ -92,7 +92,7 @@ public class McpTests : IDisposable
     {
         Assert.Equal(HttpStatusCode.Unauthorized, (await Mcp(null, DemoSeed.Coke, "initialize")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await Mcp(null, DemoSeed.Coke, "tools/call", new { name = "read_document" })).StatusCode);
-        Assert.Null(warden.Tools.Last);
+        Assert.Empty(warden.Upstream.Calls);
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public class McpTests : IDisposable
         Assert.Equal(HttpStatusCode.Forbidden, (await Mcp(pass, DemoSeed.Pepsi, "tools/list")).StatusCode);
         var call = await Result(await Mcp(pass, DemoSeed.Pepsi, "tools/call", new { name = "list_documents" }));
         Assert.True(call.GetProperty("isError").GetBoolean());
-        Assert.Null(warden.Tools.Last);
+        Assert.Empty(warden.Upstream.Calls);
         Assert.Equal("pass is for a different engagement", Audited(pass, "list_documents").Reason);
     }
 

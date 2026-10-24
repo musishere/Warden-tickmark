@@ -7,6 +7,10 @@
  *   - revoke ALL of a user's passes when they leave the firm (SCIM, step 13)
  *   - show in the audit trail which pass every action was made with
  *
+ * SignInId: when Warden made the pass itself for an MCP agent (step 17), the id of the sign-in
+ * token it was made from (Entra's `uti`, a dev token's `jti`). The agent keeps sending that sign-in
+ * token; Warden finds this row by it and reuses the pass. Revoked stays revoked for that sign-in.
+ *
  * Jti ("JWT id") is the pass's unique id. It's written inside the signed pass too,
  * so the gate can look the pass up here on every call.
  *
@@ -27,4 +31,5 @@ public class DelegatedToken
     public DateTime IssuedAt { get; set; }
     public DateTime ExpiresAt { get; set; }
     public DateTime? RevokedAt { get; set; }
+    public string? SignInId { get; set; }
 }

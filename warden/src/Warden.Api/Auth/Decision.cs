@@ -19,11 +19,11 @@
  *
  *   DecideTool(...)  "may the holder of this pass call this tool?"
  *                    Used by the tool gate (step 9), after AgentPass.Check says the pass is real.
- *     0. the tool exists: built in, or assigned a scope by an admin on an upstream MCP server
+ *     0. the tool exists: an admin assigned it a scope on one of the firm's MCP servers. A tool
+ *        agents must never call (e.g. an export) is simply never assigned: unknown tool
  *     1-6. Decide(...) again, with TODAY's data: a wall, role or agent-registration change made after the pass
  *          was stamped still applies, the pass doesn't freeze old rights
- *     7. tool policy: agents may call this tool at all (export_documents: humans only)
- *     8. scope:       the pass itself carries the scope this tool needs
+ *     7. scope:       the pass itself carries the scope this tool needs
  *
  * C# notes:
  *   record — a small read-only data class (like a Python @dataclass(frozen=True)).
@@ -85,16 +85,15 @@ public static class Decision
         return new Verdict(true, "allowed");
     }
 
-    // The scope a tool needs, or null if the firm has no such tool: a built-in tool
-    // (Permissions.Tools) or one an admin assigned on an upstream MCP server (UpstreamTool, step 18a).
-    // ponytail: built-ins win a name clash; they go away in step 18b.
+    // The scope a tool needs, or null if the firm has no such tool: one an admin assigned on one of
+    // the firm's MCP servers (UpstreamTool, `assign-tool`).
     public static string? ToolScope(WardenDbContext db, Guid tenantId, string tool) =>
-        Permissions.Tools.TryGetValue(tool, out var rule) ? rule.Scope : db.UpstreamTools.Find(tenantId, tool)?.Scope;
+        db.UpstreamTools.Find(tenantId, tool)?.Scope;
 
     // `pass` is the logbook row AgentPass.Check returned: who, which agent, which engagement, which scopes.
     public static Verdict DecideTool(WardenDbContext db, DelegatedToken pass, string tool)
     {
-        // 0. unknown tool (including an upstream tool no admin has assigned): nothing to allow.
+        // 0. unknown tool (including a server's tool no admin has assigned): nothing to allow.
         if (ToolScope(db, pass.TenantId, tool) is not { } scope)
             return Deny($"unknown tool: {tool}");
 
@@ -104,12 +103,7 @@ public static class Decision
         if (!verdict.Allowed)
             return verdict;
 
-        // 7. tool policy: some built-in tools are for humans only, whatever the role.
-        //    (An upstream tool is for agents by being assigned: that's the admin's yes.)
-        if (Permissions.Tools.TryGetValue(tool, out var rule) && !rule.AgentsAllowed)
-            return Deny($"{tool} may not be called by an agent");
-
-        // 8. the pass must carry the scope (the user may have more rights than they gave the agent).
+        // 7. the pass must carry the scope (the user may have more rights than they gave the agent).
         if (!Permissions.Parse(pass.Scope).Contains(scope))
             return Deny($"pass does not include {scope}");
 

@@ -15,6 +15,12 @@
  * (users.entra_tenant_id / entra_object_id; `dotnet run -- link-entra sara <tid> <oid>`).
  * The request continues as that Warden user: oid/tid become Warden's own ids, so every
  * controller, the decision function and the audit log work exactly as with dev tokens.
+ * Two claims are kept as they are (step 17): azp = the app (agent) Entra issued the token to
+ * (`appid` in older v1 tokens), and uti = the token's own id.
+ *
+ * MCP sign-in (step 17): agents ask Microsoft for a token with the scope api://<client id>/access_as_user
+ * (McpScope), which Warden's app registration exposes. AuthorizationServer is what Warden tells
+ * them in /.well-known/oauth-protected-resource.
  * An Entra account with no linked Warden user -> 401.
  *
  * ponytail: one Entra tenant. Multi-tenant (many firms, each with its own Entra) needs an issuer
@@ -29,6 +35,9 @@ namespace Warden.Api.Auth;
 public static class EntraSignIn
 {
     public const string Scheme = "Entra";
+    public const string McpScope = "access_as_user";  // the scope Warden's app registration exposes (how-it-works §22)
+
+    public static string AuthorizationServer(IConfiguration config) => $"https://login.microsoftonline.com/{config["Entra:TenantId"]}/v2.0";
 
     public static bool IsConfigured(IConfiguration config) =>
         !string.IsNullOrEmpty(config["Entra:TenantId"]) && !string.IsNullOrEmpty(config["Entra:ClientId"]);
@@ -37,7 +46,7 @@ public static class EntraSignIn
     {
         var tenant = config["Entra:TenantId"];
         var client = config["Entra:ClientId"]!;
-        o.Authority = $"https://login.microsoftonline.com/{tenant}/v2.0";
+        o.Authority = AuthorizationServer(config);
         o.MapInboundClaims = false;  // keep "oid", "tid" as Entra sends them
         o.TokenValidationParameters.ValidAudiences = [client, $"api://{client}"];
         o.TokenValidationParameters.ValidIssuers =
@@ -58,9 +67,12 @@ public static class EntraSignIn
             ctx.Fail("this Entra account is not linked to a Warden user");
             return Task.CompletedTask;
         }
-        ctx.Principal = new ClaimsPrincipal(new ClaimsIdentity(
-            [new Claim("oid", user.Id.ToString()), new Claim("tid", user.TenantId.ToString()), new Claim("name", user.Name)],
-            Scheme));
+        List<Claim> claims = [new("oid", user.Id.ToString()), new("tid", user.TenantId.ToString()), new("name", user.Name)];
+        if ((ctx.Principal!.FindFirst("azp") ?? ctx.Principal.FindFirst("appid"))?.Value is { } app)
+            claims.Add(new("azp", app));
+        if (ctx.Principal.FindFirst("uti")?.Value is { } uti)
+            claims.Add(new("uti", uti));
+        ctx.Principal = new ClaimsPrincipal(new ClaimsIdentity(claims, Scheme));
         return Task.CompletedTask;
     }
 }

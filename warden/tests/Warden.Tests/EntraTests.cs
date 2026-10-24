@@ -23,19 +23,7 @@ namespace Warden.Tests;
 [Collection(WardenFactory.Db)]
 public class EntraTests(WardenFactory warden)
 {
-    // A new Coke Staff member, linked to a new (fake) Entra account. Returns (Warden id, Entra oid).
-    (Guid user, Guid oid) LinkedUser()
-    {
-        var user = warden.NewCokeStaff();
-        var oid = Guid.NewGuid();
-        warden.WithDb(db =>
-        {
-            var u = db.Users.Find(user)!;
-            (u.EntraTenantId, u.EntraObjectId) = (WardenFactory.FakeEntraTenant, oid);
-            return db.SaveChanges();
-        });
-        return (user, oid);
-    }
+    (Guid user, Guid oid) LinkedUser() => warden.NewLinkedCokeStaff();
 
     HttpClient With(string token)
     {
@@ -55,7 +43,7 @@ public class EntraTests(WardenFactory warden)
         Assert.Equal(DemoSeed.FirmA.ToString(), me.GetProperty("tenantId").GetString());  // Warden's firm, not Entra's tid
 
         var res = await client.PostAsJsonAsync("/token/exchange",
-            new { agent_id = DemoSeed.Tickmark, resource = DemoSeed.Coke, scope = "documents.read" });
+            new { resource = DemoSeed.Coke, scope = "documents.read" });
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
     }
 

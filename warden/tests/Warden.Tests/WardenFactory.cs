@@ -10,8 +10,8 @@
  *
  * Also gives tests a quick way to make a demo user's sign-in token.
  *
- * The tool server behind the gate is FAKE here (FakeTools below): tests see exactly what the
- * gate forwarded (or that it forwarded nothing), and no real Tickmark is needed.
+ * The firm's MCP servers behind the gate are FAKE here (FakeUpstream below): tests see exactly
+ * what the gate forwarded (or that it forwarded nothing), and no real Tickmark is needed.
  *
  * xUnit runs test classes in PARALLEL by default. Every class that touches the database
  * joins the "database" collection ([Collection(WardenFactory.Db)]): they share ONE factory
@@ -48,22 +48,23 @@ public class WardenFactory : WebApplicationFactory<Program>
     public const string Db = "database";
     public const string TestDb = "Host=localhost;Port=5433;Database=warden_test;Username=warden;Password=warden";
 
-    public FakeTools Tools { get; } = new();
     public FakeUpstream Upstream { get; } = new();
     public const string ScimSecret = "firm-a-scim-secret-for-tests";
     public static readonly Guid FakeEntraTenant = Guid.Parse("e17a0000-0000-0000-0000-000000000001");
     public const string FakeEntraClient = "warden-test-api";
     public static readonly RsaSecurityKey FakeEntraKey = new(RSA.Create(2048)) { KeyId = "fake-entra" };
 
-    // A token as Entra would issue it for Warden (tests change the parts they want wrong).
-    public static string EntraToken(Guid oid, Guid? tid = null, string audience = FakeEntraClient, SecurityKey? key = null)
+    // A token as Entra would issue it for Warden, to an agent's app (azp: Tickmark's unless a test
+    // says otherwise). Tests change the parts they want wrong.
+    public static string EntraToken(Guid oid, Guid? tid = null, string audience = FakeEntraClient, SecurityKey? key = null, Guid? azp = null)
     {
         var t = tid ?? FakeEntraTenant;
         return new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
         {
             Issuer = $"https://login.microsoftonline.com/{t}/v2.0",
             Audience = audience,
-            Claims = new Dictionary<string, object> { ["oid"] = oid.ToString(), ["tid"] = t.ToString() },
+            Claims = new Dictionary<string, object> { ["oid"] = oid.ToString(), ["tid"] = t.ToString(),
+                ["azp"] = (azp ?? DemoSeed.TickmarkClientId).ToString(), ["uti"] = Guid.NewGuid().ToString() },
             Expires = DateTime.UtcNow.AddHours(1),
             SigningCredentials = new SigningCredentials(key ?? FakeEntraKey, SecurityAlgorithms.RsaSha256),
         });
@@ -77,10 +78,9 @@ public class WardenFactory : WebApplicationFactory<Program>
         // handed over directly instead of downloaded from Microsoft.
         builder.UseSetting("Entra:TenantId", FakeEntraTenant.ToString());
         builder.UseSetting("Entra:ClientId", FakeEntraClient);
-        // The "tools" HttpClient sends to FakeTools instead of the network.
+        // The "upstream" HttpClient sends to FakeUpstream instead of the network.
         builder.ConfigureTestServices(s =>
         {
-            s.AddHttpClient("tools").ConfigurePrimaryHttpMessageHandler(() => Tools);
             s.AddHttpClient("upstream").ConfigurePrimaryHttpMessageHandler(() => Upstream);
             s.PostConfigure<JwtBearerOptions>(EntraSignIn.Scheme, o => o.ConfigurationManager =
                 new StaticConfigurationManager<OpenIdConnectConfiguration>(new OpenIdConnectConfiguration { SigningKeys = { FakeEntraKey } }));
@@ -95,10 +95,11 @@ public class WardenFactory : WebApplicationFactory<Program>
         DemoSeed.Run(db);
     }
 
-    // A 1-hour sign-in token for a demo user, e.g. SignIn(DemoSeed.Sara, DemoSeed.FirmA).
-    public string SignIn(Guid userId, Guid tenantId) =>
+    // A 1-hour sign-in token for a demo user, e.g. SignIn(DemoSeed.Sara, DemoSeed.FirmA), issued to
+    // the agent with that Entra client id (none: a person signing in themselves).
+    public string SignIn(Guid userId, Guid tenantId, Guid? agentClientId = null) =>
         DevIssuer.CreateToken(DevIssuer.SigningKey(Services.GetRequiredService<IConfiguration>()),
-            userId, tenantId, "demo", DateTime.UtcNow.AddHours(1));
+            userId, tenantId, "demo", DateTime.UtcNow.AddHours(1), agentClientId);
 
     // A logbook row for Sara + Tickmark on Coke, expiring at `expires` (tests tweak it).
     public static DelegatedToken SaraOnCoke(DateTime expires) => new()
@@ -136,11 +137,11 @@ public class WardenFactory : WebApplicationFactory<Program>
         return work(scope.ServiceProvider.GetRequiredService<WardenDbContext>());
     }
 
-    // An HTTP client to the in-memory API, signed in as a demo user.
-    public HttpClient ClientFor(Guid userId, Guid tenantId)
+    // An HTTP client to the in-memory API, signed in as a demo user (through that agent, if given).
+    public HttpClient ClientFor(Guid userId, Guid tenantId, Guid? agentClientId = null)
     {
         var client = CreateClient();
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", SignIn(userId, tenantId));
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", SignIn(userId, tenantId, agentClientId));
         return client;
     }
 
@@ -166,7 +167,7 @@ public class WardenFactory : WebApplicationFactory<Program>
     // BEHIND the agent's ceiling, e.g. a careless registration that allows documents.export.
     public Guid NewAgent(string allowedScopes) => WithDb(db =>
     {
-        var a = new Agent { Name = "Overreach", AllowedScopes = allowedScopes };
+        var a = new Agent { Name = "Overreach", AllowedScopes = allowedScopes, EntraClientId = Guid.NewGuid() };
         db.Agents.Add(a);
         db.SaveChanges();
         return a.Id;
@@ -183,6 +184,20 @@ public class WardenFactory : WebApplicationFactory<Program>
         return u.Id;
     });
 
+    // A new Coke Staff member, linked to a new (fake) Entra account. Returns (Warden id, Entra oid).
+    public (Guid user, Guid oid) NewLinkedCokeStaff()
+    {
+        var user = NewCokeStaff();
+        var oid = Guid.NewGuid();
+        WithDb(db =>
+        {
+            var u = db.Users.Find(user)!;
+            (u.EntraTenantId, u.EntraObjectId) = (FakeEntraTenant, oid);
+            return db.SaveChanges();
+        });
+        return (user, oid);
+    }
+
     // What Entra does when someone leaves: SCIM PATCH active=false (as a string, like Entra).
     public Task<HttpResponseMessage> ScimDeactivate(Guid userId, string secret = ScimSecret)
     {
@@ -195,45 +210,37 @@ public class WardenFactory : WebApplicationFactory<Program>
         });
     }
 
-    // What an agent does: POST /token/exchange with the user's sign-in token.
-    public Task<HttpResponseMessage> Exchange(Guid userId, Guid tenantId, Guid agentId, Guid engagementId, string scope) =>
-        ClientFor(userId, tenantId).PostAsJsonAsync("/token/exchange", new { agent_id = agentId, resource = engagementId, scope });
-}
-
-// Stands in for Tickmark's tool server: remembers the last request the gate forwarded and
-// answers {"ok": true}. Set Down = true to act like a server that's not running.
-public class FakeTools : HttpMessageHandler
-{
-    public HttpRequestMessage? Last { get; private set; }
-    public string? LastBody { get; private set; }
-    public bool Down { get; set; }
-
-    public void Reset() => (Last, LastBody, Down) = (null, null, false);
-
-    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    // What an agent does: POST /token/exchange with the user's sign-in token, which Entra issued to
+    // that agent's app (its client id in azp; an unregistered agent id gets a client id nobody has).
+    public Task<HttpResponseMessage> Exchange(Guid userId, Guid tenantId, Guid agentId, Guid engagementId, string scope)
     {
-        if (Down) throw new HttpRequestException("connection refused");
-        Last = request;
-        LastBody = request.Content is null ? null : await request.Content.ReadAsStringAsync(ct);
-        return new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(new { ok = true }) };
+        var clientId = WithDb(db => db.Agents.Find(agentId)?.EntraClientId) ?? Guid.NewGuid();
+        return ClientFor(userId, tenantId, clientId).PostAsJsonAsync("/token/exchange", new { resource = engagementId, scope });
     }
 }
 
-// Stands in for a firm's own MCP server behind Warden (step 18a), e.g. a SharePoint MCP server.
-// Speaks MCP like a real one: initialize hands out a session id that later messages must carry,
-// and tools/call answers as a server-sent event stream (text/event-stream), not plain JSON.
-// It offers two tools, `search` and `delete_all`. Remembers every tools/call it got.
+// Stands in for EVERY MCP server behind Warden: Tickmark's (seeded, TickmarkUrl) and a firm's
+// document server (Url, added by UpstreamTests). Speaks MCP like a real one: initialize hands out a
+// session id that later messages must carry, and tools/call answers as a server-sent event stream
+// (text/event-stream), not plain JSON.
+// Every address offers the same tools (Tickmark's three + `search` and `delete_all`): it's Warden's
+// job to only use the ones assigned on THAT server. Remembers every tools/call it got.
+// Down: the addresses that act like a server that's not running.
 public class FakeUpstream : HttpMessageHandler
 {
     public const string Url = "http://firm-a-docs.test/mcp";
     public const string Audience = "firm-a-docs";
-    public List<(string Tool, string Token, string Body)> Calls { get; } = [];
-    public bool Down { get; set; }
-    public void Reset() { Calls.Clear(); Down = false; }
+    public const string TickmarkUrl = "http://localhost:8000/mcp";
+    public List<(string Url, string Tool, string Token, string Body)> Calls { get; } = [];
+    public HashSet<string> Down { get; } = [];
+    public void Reset() { Calls.Clear(); Down.Clear(); }
+
+    static readonly string[] Tools = ["list_documents", "read_document", "run_vouch", "search", "delete_all"];
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
-        if (Down) throw new HttpRequestException("connection refused");
+        var url = request.RequestUri!.ToString();
+        if (Down.Contains(url)) throw new HttpRequestException("connection refused");
         var msg = await request.Content!.ReadFromJsonAsync<JsonElement>(ct);
         var method = msg.GetProperty("method").GetString();
         if (method == "initialize")
@@ -247,14 +254,13 @@ public class FakeUpstream : HttpMessageHandler
         if (!msg.TryGetProperty("id", out _))
             return new HttpResponseMessage(HttpStatusCode.Accepted);
         if (method == "tools/list")
-            return Json(msg, new { tools = new[] {
-                new { name = "search", description = "Search the firm's documents.", inputSchema = new { type = "object" } },
-                new { name = "delete_all", description = "Delete every document.", inputSchema = new { type = "object" } } } });
+            return Json(msg, new { tools = Tools.Select(t => new { name = t,
+                description = t == "search" ? "Search the firm's documents." : $"The {t} tool.", inputSchema = new { type = "object" } }) });
 
         // tools/call: answered as an event stream.
         var p = msg.GetProperty("params");
         var tool = p.GetProperty("name").GetString()!;
-        Calls.Add((tool, request.Headers.Authorization!.Parameter!, p.GetProperty("arguments").GetRawText()));
+        Calls.Add((url, tool, request.Headers.Authorization!.Parameter!, p.GetProperty("arguments").GetRawText()));
         var reply = JsonSerializer.Serialize(new { jsonrpc = "2.0", id = msg.GetProperty("id"),
             result = new { content = new[] { new { type = "text", text = $"called {tool}" } }, isError = false } });
         return new HttpResponseMessage(HttpStatusCode.OK)

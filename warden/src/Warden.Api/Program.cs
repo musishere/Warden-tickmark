@@ -9,17 +9,18 @@
  *      AddAuthentication = "read and verify the sign-in token on each request",
  *      AddAuthorization  = "decide if that caller may use the endpoint",
  *      AddSingleton<WardenSigningKey> = "one shared key pair for signing agent passes",
- *      AddHttpClient("tools") = "how to reach the tool server behind the gate".
+ *      AddHttpClient("upstream") = "how to reach the firm's MCP servers behind the gate".
  *   3. Build, then the middleware pipeline: each request passes through
  *      UseAuthentication -> UseAuthorization -> the controller, in that order.
  *   4. Run: starts the HTTP server and blocks until it stops.
  *
  * Command-line extras (run, do the job, exit):
  *   dotnet run -- seed             insert the demo data (Data/DemoSeed.cs)
- *   dotnet run -- dev-token sara   print a dev sign-in token for a demo user
+ *   dotnet run -- dev-token sara [tickmark]   print a dev sign-in token for a demo user (issued to that agent)
  *   dotnet run -- link-entra sara <tid> <oid>   let a real Entra account sign in as that user
  *   dotnet run -- add-upstream "Firm A" <name> <mcp url> <audience>   connect a firm's MCP server
  *   dotnet run -- assign-tool "Firm A" <server> <tool> <scope>        let agents use one of its tools
+ *   dotnet run -- register-agent <name> <entra client id> "<scopes>"   let an agent (an Entra app) in
  *
  * The last line ("public partial class Program;") lets the test project start
  * this app in memory (WebApplicationFactory<Program>), like FastAPI's TestClient.
@@ -69,15 +70,9 @@ if (EntraSignIn.IsConfigured(builder.Configuration))
 // Singleton = one instance for the whole app, so every pass is signed with the same key.
 builder.Services.AddSingleton<WardenSigningKey>();
 
-// The tool server behind the gate (Tickmark). The gate forwards approved calls here
-// (Auth/ToolGate.cs). Tests swap in a fake (WardenFactory.cs).
-builder.Services.AddHttpClient("tools", c =>
-{
-    c.BaseAddress = new Uri(builder.Configuration["Tools:BaseUrl"]!);
-    c.Timeout = TimeSpan.FromMinutes(5);  // run_vouch reads every PDF: it can take a while
-});
-
-// A firm's own MCP servers behind Warden (Auth/UpstreamMcp.cs, step 18a). Tests swap in a fake.
+// The firm's MCP servers behind the gate (Auth/UpstreamMcp.cs): every approved call goes to one of
+// them. Tests swap in a fake (WardenFactory.cs). 5 minutes: a tool like Tickmark's run_vouch reads
+// every PDF, it can take a while.
 builder.Services.AddHttpClient("upstream", c => c.Timeout = TimeSpan.FromMinutes(5));
 
 // The tool gate (Auth/ToolGate.cs). Scoped = one per request, sharing that request's database session.
@@ -159,14 +154,40 @@ if (args.Length == 5 && args[0] == "assign-tool")
     return;
 }
 
-// `dotnet run -- dev-token sara`: print a 1-hour sign-in token for a seeded user, then exit.
-if (args.Length == 2 && args[0] == "dev-token")
+// `dotnet run -- register-agent Tickmark <entra client id> "documents.read vouch.run"`: let an agent
+// in (step 17a). The client id is the agent's Entra app registration; Warden knows the agent by it
+// (the `azp` of its sign-in tokens). The scopes are its ceiling (step 18). Run again to change them.
+if (args.Length == 4 && args[0] == "register-agent")
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<WardenDbContext>();
+    var unknown = Warden.Core.Permissions.Parse(args[3]).Except(Warden.Core.Permissions.AllScopes).ToList();
+    if (unknown.Count > 0)
+    {
+        Console.Error.WriteLine($"unknown scope {string.Join(' ', unknown)}; known: {string.Join(' ', Warden.Core.Permissions.AllScopes)}");
+        Environment.ExitCode = 1;
+        return;
+    }
+    var client = Guid.Parse(args[2]);
+    var agent = db.Agents.SingleOrDefault(a => a.Name.ToLower() == args[1].ToLower());
+    if (agent is null)
+        db.Agents.Add(agent = new Warden.Core.Domain.Agent { Name = args[1] });
+    (agent.EntraClientId, agent.AllowedScopes) = (client, args[3]);
+    db.SaveChanges();
+    Console.WriteLine($"{agent.Name} (Entra app {client}) may now be given: {args[3]}");
+    return;
+}
+
+// `dotnet run -- dev-token sara tickmark`: print a 1-hour sign-in token for a seeded user, issued to
+// that registered agent (its client id goes in `azp`, like Entra does), then exit.
+if (args.Length is 2 or 3 && args[0] == "dev-token")
 {
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<WardenDbContext>();
     var user = db.Users.Single(u => u.Name.ToLower() == args[1].ToLower());
+    var agent = args.Length == 3 ? db.Agents.Single(a => a.Name.ToLower() == args[2].ToLower()).EntraClientId : null;
     Console.WriteLine(DevIssuer.CreateToken(DevIssuer.SigningKey(app.Configuration),
-        user.Id, user.TenantId, user.Name, DateTime.UtcNow.AddHours(1)));
+        user.Id, user.TenantId, user.Name, DateTime.UtcNow.AddHours(1), agent));
     return;
 }
 

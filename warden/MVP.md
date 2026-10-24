@@ -59,15 +59,18 @@ learns their tools from them. Tickmark is only the demo agent and demo tool serv
   `tools/list` (only the tools this user + agent may use; export never listed), `tools/call` →
   the existing gate (pass check → decision → audit log → forward). One URL per engagement, so
   "which client" is part of the address — `mcp_call_is_checked_and_logged_like_any_tool_call`
-- [ ] 17. MCP sign-in, the standard way: `/.well-known/oauth-protected-resource` (RFC 9728) pointing
+- [x] 17. MCP sign-in, the standard way: `/.well-known/oauth-protected-resource` (RFC 9728) pointing
   at Entra; 401 + `WWW-Authenticate` when no token; Warden turns the Entra token into a pass
   itself, per session — `mcp_client_without_sign_in_gets_401_with_where_to_sign_in`
-- [ ] 17a. Any agent, proven: the agent is who Entra says it is, not who it claims. Each agent is
+- [x] 17a. Any agent, proven: the agent is who Entra says it is, not who it claims. Each agent is
   an Entra app registration; Warden reads the client id from the signed token (`azp`) and maps it
   to a row in `agents` (like `link-entra` does for users). Unknown client id → refused until the
   firm's admin registers it: `dotnet run -- register-agent "<name>" <entra client id> "<allowed scopes>"`.
   Token exchange stops trusting the `agent_id` in the request body —
   `unknown_agent_is_refused_even_with_a_valid_sign_in`
+  (17 + 17a built together: with MCP sign-in, the agent can only be known from the token.
+  Done: `ProtectedResourceController`, `Auth/Delegation.cs`, `agents.entra_client_id`,
+  `delegated_tokens.sign_in_id`. Real Entra end to end needs step 14's app registration.)
 - [x] 18. Per-agent ceiling: each registered agent gets `allowed_scopes`; a pass is
   agent ceiling ∩ user's rights ∩ what was asked — `agent_cannot_exceed_its_registration`
 - [x] 18a. Warden in front of any MCP server: the firm's admin connects upstream MCP servers
@@ -76,12 +79,15 @@ learns their tools from them. Tickmark is only the demo agent and demo tool serv
   and refused (fail closed: a tool an upstream adds tomorrow stays off until an admin says so).
   `tools/call` → the gate → the upstream that owns the tool —
   `upstream_tool_is_hidden_until_an_admin_assigns_a_scope`
-- [ ] 18b. Tickmark's tools become one MCP server behind Warden, like any other. Remove the
+- [x] 18b. Tickmark's tools become one MCP server behind Warden, like any other. Remove the
   hand-written `Permissions.Tools` menu, `Tools:BaseUrl` and the plain-HTTP forward path, so every
   tool takes the same route — `tickmark_tools_work_as_an_upstream_mcp_server`
   - [x] 18b-1. Tickmark serves its tools over MCP at `/mcp` (`tickmark/src/tickmark/api/mcp.py`) —
     `tickmark/tests/test_mcp.py`
-  - [ ] 18b-2. Warden drops the built-in list and plain-HTTP path; Tickmark is seeded as Firm A's upstream
+  - [x] 18b-2. Warden drops the built-in list and plain-HTTP path; Tickmark is seeded as Firm A's upstream
+    (`tickmark`, `http://localhost:8000/mcp`, 3 tools assigned). Export is never assigned, so it's an
+    unknown tool. `/tools/{tool}/invoke` stays for `warden_client.py` (forwards over MCP) until step 19.
+    One audience per server across all firms (unique index) — `two_servers_cannot_share_an_audience`
 - [ ] 19. Proof with a stock client: MCP Inspector (or Claude Desktop) pointed at Warden, no Warden
   code: Coke works, Pepsi refused, export not offered, all in the audit log. Tickmark drops
   `warden_client.py` and uses a plain MCP client. A second, non-Tickmark MCP server behind Warden

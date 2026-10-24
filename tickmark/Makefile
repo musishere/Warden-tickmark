@@ -13,7 +13,7 @@ help:
 	@echo "make logs     follow the step-by-step log"
 	@echo "make demo     generate the easy and tough test cases in data/demo/"
 	@echo "make warden-demo  files for Warden's demo engagements (Coke, Pepsi) behind the tools"
-	@echo "make agent TOKEN=... ENG=...  vouch an engagement through Warden (TOKEN: dev-token sara)"
+	@echo "make agent TOKEN=... ENG=...  vouch an engagement through Warden (TOKEN: dev-token sara tickmark)"
 	@echo "make test     run the tests"
 	@echo "make eval     verdicts vs labels on the test sets, own text only (no Azure)"
 	@echo "make stop     stop Postgres"

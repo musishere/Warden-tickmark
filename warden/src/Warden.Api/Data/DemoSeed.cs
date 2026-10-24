@@ -11,10 +11,13 @@
  *     Omar is an Admin member of Pepsi AND walled from it: the wall must win.
  *   Firm B
  *     Acme 2026:  Dana (Staff)    — must never see anything of Firm A
- *   Agent: Tickmark
+ *   Agent: Tickmark (Entra client id TickmarkClientId), registered for documents.read vouch.run
+ *   Firm A's MCP server "tickmark" (http://localhost:8000/mcp, audience tickmark-tools), tools assigned:
+ *     list_documents, read_document -> documents.read      run_vouch -> vouch.run
+ *     (Tickmark's export is not assigned, so to agents it doesn't exist.)
  *
  * IDs are fixed (not random) so tests and Tickmark can refer to DemoSeed.Sara etc.
- * Safe to run twice: if Firm A already exists, it does nothing.
+ * Safe to run twice: each part is skipped if it's already there.
  * Deliberately NOT a migration: demo people must never reach a production database.
  */
 using Warden.Core.Domain;
@@ -38,11 +41,21 @@ public static class DemoSeed
     public static readonly Guid Dana = Guid.Parse("00000000-0000-0000-0000-000000000005");
 
     public static readonly Guid Tickmark = Guid.Parse("a9e00000-0000-0000-0000-000000000001");
+    // Tickmark's Entra app registration (client id). Made up for the demo: with a real Entra, run
+    // `register-agent Tickmark <its real client id> "documents.read vouch.run"`.
+    public static readonly Guid TickmarkClientId = Guid.Parse("c1000000-0000-0000-0000-000000000001");
+    public static readonly Guid TickmarkServer = Guid.Parse("5e000000-0000-0000-0000-000000000001");
 
     public static void Run(WardenDbContext db)
     {
-        if (db.Tenants.Any(t => t.Id == FirmA)) return;  // already seeded
+        if (!db.Tenants.Any(t => t.Id == FirmA))
+            People(db);
+        if (!db.UpstreamServers.Any(s => s.Id == TickmarkServer))
+            TickmarkTools(db);
+    }
 
+    static void People(WardenDbContext db)
+    {
         db.AddRange(
             new Tenant { Id = FirmA, Name = "Firm A" },
             new Tenant { Id = FirmB, Name = "Firm B" },
@@ -69,7 +82,19 @@ public static class DemoSeed
             new EthicalWall { EngagementId = Pepsi, UserId = Omar, Reason = "Works on Coke 2026" },
             new EthicalWall { EngagementId = Coke, UserId = Bilal, Reason = "Works on Pepsi 2026" },
 
-            new Agent { Id = Tickmark, Name = "Tickmark", AllowedScopes = "documents.read vouch.run" });
+            new Agent { Id = Tickmark, Name = "Tickmark", AllowedScopes = "documents.read vouch.run", EntraClientId = TickmarkClientId });
+        db.SaveChanges();
+    }
+
+    // What Firm A's admin would do with add-upstream + assign-tool (Program.cs).
+    static void TickmarkTools(WardenDbContext db)
+    {
+        db.Add(new UpstreamServer { Id = TickmarkServer, TenantId = FirmA, Name = "tickmark", Url = "http://localhost:8000/mcp", Audience = "tickmark-tools" });
+        db.SaveChanges();  // the server first: the tools point at it
+        db.AddRange(
+            new UpstreamTool { TenantId = FirmA, Name = "list_documents", ServerId = TickmarkServer, Scope = "documents.read" },
+            new UpstreamTool { TenantId = FirmA, Name = "read_document", ServerId = TickmarkServer, Scope = "documents.read" },
+            new UpstreamTool { TenantId = FirmA, Name = "run_vouch", ServerId = TickmarkServer, Scope = "vouch.run" });
         db.SaveChanges();
     }
 }

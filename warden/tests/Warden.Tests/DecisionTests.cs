@@ -4,7 +4,7 @@
  *   Sara's pass has documents.read  -> read_document allowed
  *   same pass                       -> run_vouch denied: the pass doesn't carry vouch.run
  *                                      (Sara herself may vouch, she just didn't give the agent that)
- *   Omar (Admin, may export)        -> export_documents denied: agents may never export
+ *   Omar (Admin, may export)        -> export_documents denied: never assigned to agents, so unknown
  *   agent's registration narrowed   -> denied at once, even for a pass stamped before
  *   a pass for Pepsi held by Sara   -> denied by the wall, even though the pass "says" Pepsi
  *   a made-up tool                  -> denied
@@ -42,7 +42,7 @@ public class DecisionTests(WardenFactory warden)
         pass.UserId = DemoSeed.Omar;  // Admin on Coke: his role allows documents.export
         pass.AgentId = warden.NewAgent("documents.export");  // a careless registration that allows it too
         pass.Scope = "documents.export";
-        Assert.Equal(new Decision.Verdict(false, "export_documents may not be called by an agent"), Tool(pass, "export_documents"));
+        Assert.Equal(new Decision.Verdict(false, "unknown tool: export_documents"), Tool(pass, "export_documents"));
     }
 
     // Narrowing an agent's registration takes effect on passes it ALREADY holds.

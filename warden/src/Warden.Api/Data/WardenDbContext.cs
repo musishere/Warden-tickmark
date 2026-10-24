@@ -77,8 +77,15 @@ public class WardenDbContext(DbContextOptions<WardenDbContext> options) : DbCont
         b.Entity<AuditEntry>().HasIndex(a => new { a.TenantId, a.EngagementId });
 
         // upstream_servers: a firm's own MCP servers (step 18a), one name per firm.
+        // One agent per Entra app registration (step 17a); a sign-in session's passes, found by its token id (step 17).
+        b.Entity<Agent>().HasIndex(a => a.EntraClientId).IsUnique();
+        b.Entity<DelegatedToken>().HasIndex(t => t.SignInId);
+
         b.Entity<UpstreamServer>().HasOne<Tenant>().WithMany().HasForeignKey(u => u.TenantId).OnDelete(DeleteBehavior.Restrict);
         b.Entity<UpstreamServer>().HasIndex(u => new { u.TenantId, u.Name }).IsUnique();
+        // One audience per server across ALL firms: a token Warden made for one firm's server is
+        // never accepted by another firm's server that picked the same name.
+        b.Entity<UpstreamServer>().HasIndex(u => u.Audience).IsUnique();
 
         // upstream_tools: one row per tool an admin allowed, keyed by (firm, tool name), so two
         // servers can't both claim the same tool name for one firm.

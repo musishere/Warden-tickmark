@@ -8,7 +8,7 @@
 Warden says no at any step (wall, not a member, revoked, Warden down) -> stop, exit code 1.
 Every step, allowed or not, is in Warden's audit log (GET /audit?engagement=).
 
-The sign-in token comes from the user (in dev: `dotnet run --project src/Warden.Api -- dev-token sara`).
+The sign-in token comes from the user (in dev: `dotnet run --project src/Warden.Api -- dev-token sara tickmark`: issued to Tickmark, so Warden knows which agent it is).
 """
 import argparse
 import sys

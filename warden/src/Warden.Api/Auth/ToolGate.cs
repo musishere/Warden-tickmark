@@ -8,13 +8,13 @@
  * In order. Nothing is forwarded unless every step says yes:
  *   1. check the pass (AgentPass.Check): Warden's signature, iss, aud = warden-tools, not
  *      expired, in the logbook, not revoked                      -> else 401 invalid_token
- *   2. decide (Decision.DecideTool): tool exists, walls, membership, role (today's data),
- *      tool policy (export: humans only), the pass carries the scope -> else 403 access_denied
+ *   2. decide (Decision.DecideTool): tool exists (an admin assigned it), agent ceiling, walls,
+ *      membership, role (today's data), the pass carries the scope -> else 403 access_denied
  *   3. log the decision in the audit log, allowed or denied. If that write fails, the request
  *      fails with 500 and nothing is forwarded: no log, no access.
- *   4. forward with a fresh 60-second token (AgentPass.CreateForward), and return the answer as-is:
- *        a built-in tool  -> plain HTTP to Tools:BaseUrl (Tickmark, until step 18b)
- *        an upstream tool -> MCP tools/call to the firm's server that owns it (UpstreamMcp.cs, step 18a)
+ *   4. forward: MCP tools/call to the firm's server that owns the tool (UpstreamMcp.cs), with a
+ *      fresh 60-second token for that server (AgentPass.CreateForward), and return its result as-is.
+ *      Warden has no built-in tools: Tickmark is just one of Firm A's servers (step 18b).
  *      Tool server unreachable -> 502. The agent never gets data Warden didn't approve.
  *
  * Which engagement, which user, which firm: ALWAYS from the pass, never from the body.
@@ -27,23 +27,20 @@
  * C# notes:
  *   Registered in Program.cs with AddScoped: a fresh ToolGate per request, like the
  *     controllers, so it shares that request's database session.
- *   IHttpClientFactory — hands out HttpClients configured in Program.cs (the "tools" one).
+ *   IHttpClientFactory — hands out HttpClients configured in Program.cs (the "upstream" one).
  *   ILogger — the app log (console), like Python's logging.getLogger().
  */
-using System.Net.Http.Headers;
 using System.Text.Json;
 using Warden.Api.Data;
-using Warden.Core;
 using Warden.Core.Domain;
 
 namespace Warden.Api.Auth;
 
-public class ToolGate(WardenDbContext db, WardenSigningKey key, IHttpClientFactory http,
-    IConfiguration config, ILogger<ToolGate> log)
+public class ToolGate(WardenDbContext db, WardenSigningKey key, IHttpClientFactory http, ILogger<ToolGate> log)
 {
     // What the gate answered: an HTTP status and a body (JSON, or whatever the tool returned).
-    // McpResult = the body is an upstream MCP server's tools/call result, to pass on as-is.
-    public record Result(int Status, string Body, string ContentType = "application/json", bool McpResult = false);
+    // McpResult = the body is the tool server's MCP tools/call result, to pass on as-is.
+    public record Result(int Status, string Body, bool McpResult = false);
 
     // authorization = the request's Authorization header, as sent ("Bearer <pass>").
     // engagement = the engagement the caller's address is for (MCP's /mcp/engagements/{id}), if any:
@@ -81,25 +78,13 @@ public class ToolGate(WardenDbContext db, WardenSigningKey key, IHttpClientFacto
         if (!verdict.Allowed)
             return Error(403, "access_denied", verdict.Reason);
 
-        // 4. forward. scope is set: DecideTool already refused unknown tools.
+        // 4. forward to the server that owns the tool. scope is set: DecideTool already refused unknown tools.
         try
         {
-            // An upstream MCP server's tool: MCP tools/call there, its result passed on as-is.
-            if (!Permissions.Tools.ContainsKey(tool))
-            {
-                var server = db.UpstreamServers.Find(db.UpstreamTools.Find(pass.TenantId, tool)!.ServerId)!;
-                var result = await UpstreamMcp.Request(http.CreateClient("upstream"), server,
-                    AgentPass.CreateForward(pass, tool, scope!, server.Audience, key), "tools/call", new { name = tool, arguments = args });
-                return new Result(200, result.GetRawText(), McpResult: true);
-            }
-
-            // A built-in tool (Tickmark, until step 18b): plain HTTP.
-            var forward = new HttpRequestMessage(HttpMethod.Post, $"tools/{tool}") { Content = JsonContent.Create(args) };
-            forward.Headers.Authorization = new AuthenticationHeaderValue("Bearer",
-                AgentPass.CreateForward(pass, tool, scope!, config["Tools:Audience"]!, key));
-            using var res = await http.CreateClient("tools").SendAsync(forward);
-            return new Result((int)res.StatusCode, await res.Content.ReadAsStringAsync(),
-                res.Content.Headers.ContentType?.ToString() ?? "application/json");
+            var server = db.UpstreamServers.Find(db.UpstreamTools.Find(pass.TenantId, tool)!.ServerId)!;
+            var result = await UpstreamMcp.Request(http.CreateClient("upstream"), server,
+                AgentPass.CreateForward(pass, tool, scope!, server.Audience, key), "tools/call", new { name = tool, arguments = args });
+            return new Result(200, result.GetRawText(), McpResult: true);
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException)  // down, or timed out
         {
@@ -109,16 +94,13 @@ public class ToolGate(WardenDbContext db, WardenSigningKey key, IHttpClientFacto
     }
 
     // The menu for tools/list: every tool this pass may call right now (DecideTool says yes).
-    //   built-in tools, described by Permissions.Tools
-    //   + each of the firm's upstream servers' tools, as the SERVER describes them (asked live),
-    //     kept only if an admin assigned that tool on that server. A server that's down is skipped.
+    // Each of the firm's servers is asked live for its tools, which come back as the SERVER describes
+    // them; a tool is kept only if an admin assigned it on that server. A server that's down is skipped.
+    // ponytail: servers are asked one after another, uncached; parallel + a short cache if menus get slow.
     // Listing isn't an action, so nothing is written to the audit log.
     public async Task<List<object>> List(DelegatedToken pass)
     {
-        var menu = Permissions.Tools
-            .Where(t => Decision.DecideTool(db, pass, t.Key).Allowed)
-            .Select(t => (object)new { name = t.Key, description = t.Value.Description, inputSchema = JsonDocument.Parse(t.Value.InputSchema).RootElement })
-            .ToList();
+        var menu = new List<object>();
 
         foreach (var server in db.UpstreamServers.Where(s => s.TenantId == pass.TenantId).ToList())
         {
@@ -129,8 +111,7 @@ public class ToolGate(WardenDbContext db, WardenSigningKey key, IHttpClientFacto
                 foreach (var tool in result.GetProperty("tools").EnumerateArray())
                 {
                     var name = tool.GetProperty("name").GetString()!;
-                    if (!Permissions.Tools.ContainsKey(name)
-                        && db.UpstreamTools.Find(pass.TenantId, name)?.ServerId == server.Id
+                    if (db.UpstreamTools.Find(pass.TenantId, name)?.ServerId == server.Id
                         && Decision.DecideTool(db, pass, name).Allowed)
                         menu.Add(tool);
                 }

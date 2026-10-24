@@ -34,6 +34,10 @@ namespace Warden.Api.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("allowed_scopes");
 
+                    b.Property<Guid?>("EntraClientId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("entra_client_id");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("text")
@@ -41,6 +45,10 @@ namespace Warden.Api.Data.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_agents");
+
+                    b.HasIndex("EntraClientId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_agents_entra_client_id");
 
                     b.ToTable("agents", (string)null);
                 });
@@ -137,6 +145,10 @@ namespace Warden.Api.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("scope");
 
+                    b.Property<string>("SignInId")
+                        .HasColumnType("text")
+                        .HasColumnName("sign_in_id");
+
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid")
                         .HasColumnName("tenant_id");
@@ -153,6 +165,9 @@ namespace Warden.Api.Data.Migrations
 
                     b.HasIndex("EngagementId")
                         .HasDatabaseName("ix_delegated_tokens_engagement_id");
+
+                    b.HasIndex("SignInId")
+                        .HasDatabaseName("ix_delegated_tokens_sign_in_id");
 
                     b.HasIndex("TenantId")
                         .HasDatabaseName("ix_delegated_tokens_tenant_id");
@@ -282,6 +297,10 @@ namespace Warden.Api.Data.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_upstream_servers");
+
+                    b.HasIndex("Audience")
+                        .IsUnique()
+                        .HasDatabaseName("ix_upstream_servers_audience");
 
                     b.HasIndex("TenantId", "Name")
                         .IsUnique()

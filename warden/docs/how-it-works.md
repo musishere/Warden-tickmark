@@ -186,11 +186,14 @@ then lets the call through to the tool. Ask for Pepsi instead, and it stops at t
 🔧 **Technically**
 
 1. `POST /token/exchange` with Sara's token as `Authorization: Bearer`, body
-   `{agent_id, resource, scope}` → pass (JWT) + logbook row + audit row.
+   `{resource, scope}` → pass (JWT) + logbook row + audit row. The agent is the sign-in token's `azp`.
+   (An MCP client skips this: it sends the sign-in token to `/mcp/engagements/{id}` and Warden
+   makes the pass itself, section 11.)
 2. `POST /tools/{tool}/invoke` with the pass → `AgentPass.Check` → `Decision.DecideTool` → audit
-   row → forward to `{Tools:BaseUrl}tools/{tool}` with a 60-second forwarded token.
-3. Tickmark's tool verifies the forwarded token against Warden's JWKS, runs, answers; Warden
-   returns the answer as-is.
+   row → MCP `tools/call` to the firm's server that owns the tool (`upstream_tools` → `upstream_servers`;
+   for the demo tools that's Tickmark's `http://localhost:8000/mcp`) with a 60-second forwarded token.
+3. Tickmark's `/mcp` verifies the forwarded token against Warden's JWKS, runs the tool, answers;
+   Warden returns the answer (the plain door unwraps the MCP result's text).
 
 🖼️ **Picture**
 
@@ -238,11 +241,11 @@ expiry, with `ClockSkew = 0` (expired means expired).
 |---|---|---|---|
 | Signed by | Entra ID (RS256) or DevIssuer (HS256, dev only) | Warden (RS256) | Warden (RS256) |
 | `iss` | Entra tenant / `warden-dev` | `warden` | `warden` |
-| `aud` | `api://<client>` or client id / `warden` | `warden-tools` | `tickmark-tools` (`Tools:Audience`) |
+| `aud` | `api://<client>` or client id / `warden` | `warden-tools` | the server's `upstream_servers.audience` (`tickmark-tools`) |
 | Lifetime | ~1 hour | 15 min (`Token:LifetimeMinutes`) | 60 s (`AgentPass.ForwardLifetime`) |
-| Held by | the user | the agent | Warden → tool; the agent never sees it |
-| Accepted by | Warden's normal endpoints | only `/tools/{tool}/invoke` | only Tickmark's `/tools/*` |
-| Key claims | `oid`, `tid`, `name` | `sub`, `act.sub`, `tid`, `eng`, `scope`, `jti` | same + `tool`, `scope` (one), `pass` (= pass jti), new `jti` |
+| Held by | the user's agent (Entra issues it to the agent's app) | the agent, or only Warden (MCP sign-in) | Warden → tool; the agent never sees it |
+| Accepted by | Warden's normal endpoints + `/mcp` | `/tools/{tool}/invoke`, `/mcp` | only the tool server it names (`aud`) |
+| Key claims | `oid`, `tid`, `name`, `azp` (the agent's app), `uti`/`jti` | `sub`, `act.sub`, `tid`, `eng`, `scope`, `jti` | same + `tool`, `scope` (one), `pass` (= pass jti), new `jti` |
 | Revocable | by Entra | yes, by `jti` | expires almost at once |
 
 🖼️ **Picture**
@@ -276,7 +279,7 @@ never from anything the caller types.
   (`/health`, JWKS, and the gate and SCIM, which check their own credentials).
 - **DevIssuer** (`Auth/DevIssuer.cs`): HS256 with `DevIssuer:Key`, `iss=warden-dev`, `aud=warden`.
   The key is trusted **only when `ASPNETCORE_ENVIRONMENT=Development`**; in Production no key is
-  set, so every dev token gets 401. `dotnet run -- dev-token sara` prints a 1-hour token.
+  set, so every dev token gets 401. `dotnet run -- dev-token sara tickmark` prints a 1-hour token issued to Tickmark (`azp` = its client id).
 - **Entra** (`Auth/EntraSignIn.cs`): Authority `https://login.microsoftonline.com/<tenant>/v2.0`
   (keys from its OpenID metadata), audiences `<client id>` and `api://<client id>`, issuers v2
   `login.microsoftonline.com/<tenant>/v2.0` and v1 `sts.windows.net/<tenant>/`. `OnTokenValidated`
@@ -347,16 +350,18 @@ more than its person has, and usually gets less.
 ```
 POST /token/exchange
 Authorization: Bearer <Sara's sign-in token>
-{ "agent_id": "<Tickmark>", "resource": "<Coke>", "scope": "documents.read vouch.run" }
+{ "resource": "<Coke>", "scope": "documents.read vouch.run" }
 ```
 
 1. `scope` must be non-empty and only known scopes → else **400** `invalid_scope`.
-2. `Decision.Decide(db, tid, oid, agent_id, resource, scopes)` (section 10) → no → **403**
-   `access_denied` + reason.
-3. One `SaveChanges` (one transaction): `audit_log` row (allowed or denied) and, if allowed, a
+2. The agent = `Delegation.AgentOf`: the sign-in token's `azp` → `agents.entra_client_id` (step 17a).
+   An `agent_id` in the body is ignored. No match → `unknown agent`.
+3. `Decision.Decide(db, tid, oid, agent, resource, scopes)` (section 10) → no → **403**
+   `access_denied` + reason. (Steps 2-4 are `Auth/Delegation.cs` `Issue`, shared with MCP sign-in.)
+4. One `SaveChanges` (one transaction): `audit_log` row (allowed or denied) and, if allowed, a
    `delegated_tokens` row (`jti`, tenant, user, agent, engagement, sorted scope, issued, expires).
    If the audit write fails, no pass is issued.
-4. Sign with `AgentPass.Create` and return:
+5. Sign with `AgentPass.Create` and return:
 
 ```json
 { "access_token": "<pass>", "issued_token_type": "urn:ietf:params:oauth:token-type:jwt",
@@ -377,7 +382,8 @@ What's inside the pass:
 | `jti` | GUID | its logbook row |
 | `iat` / `nbf` / `exp` | now / now / +15 min | lifetime |
 
-Known limit: the agent only *names* itself (`agent_id`); it doesn't prove it with a credential yet.
+The agent can't name itself: Entra signs which app the token was issued to (`azp`), and the firm's
+admin registered that app as an agent (`register-agent <name> <client id> "<scopes>"`).
 
 🖼️ **Picture**
 
@@ -468,11 +474,12 @@ role or a narrowed agent registration applies at the very next call.
   5. `members` row → else `not a member of this engagement`
   6. `scopes ⊆ Permissions.ScopesFor(member.Role)` → else `<Role> may not grant: <scopes>`
 - `DecideTool(db, passRow, tool)`:
-  0. tool in `Permissions.Tools` → else `unknown tool: <name>`
+  0. an `upstream_tools` row for (firm, tool) → else `unknown tool: <name>`. A tool agents must
+     never call (an export) is simply never assigned
   1–6. `Decide` with the pass's tenant/user/agent/engagement and `{tool's scope}`, on current data
-  7. `rule.AgentsAllowed` → else `<tool> may not be called by an agent`
-  8. pass scope contains the tool's scope → else `pass does not include <scope>`
-- Roles and tools are data in `Warden.Core/Permissions.cs` (plain C#, no web or DB code).
+  7. pass scope contains the tool's scope → else `pass does not include <scope>`
+- Roles → scopes are data in `Warden.Core/Permissions.cs` (plain C#, no web or DB code). Tool →
+  scope is data in `upstream_tools`, set by the firm's admin (`assign-tool`).
 
 🖼️ **Picture**
 
@@ -492,11 +499,9 @@ flowchart TD
     Q6 -->|no| X6["❌ Staff may not grant: ..."]
     Q6 -->|yes| T{"tool call?"}
     T -->|"no (pass / audit)"| OK1["✅ allowed"]
-    T -->|yes| Q7{"7 🛠️ agents may<br/>use this tool?"}
-    Q7 -->|no| X7["❌ may not be called by an agent"]
-    Q7 -->|yes| Q8{"8 🎫 scope on the pass?"}
-    Q8 -->|no| X8["❌ pass does not include ..."]
-    Q8 -->|yes| OK2["✅ allowed"]
+    T -->|yes| Q7{"7 🎫 scope on the pass?"}
+    Q7 -->|no| X7["❌ pass does not include ..."]
+    Q7 -->|yes| OK2["✅ allowed"]
 ```
 
 **Roles → scopes**
@@ -507,14 +512,14 @@ flowchart TD
 | Manager | ✅ | ✅ | ✅ |
 | Admin | ✅ | ✅ | ✅ |
 
-**Tools → rules**
+**Tools → scopes** (Firm A's `upstream_tools`, seeded; an admin changes them with `assign-tool`)
 
-| Tool | Needs scope | Agents allowed? |
-|---|---|:---:|
-| `list_documents` | `documents.read` | ✅ |
-| `read_document` | `documents.read` | ✅ |
-| `run_vouch` | `vouch.run` | ✅ |
-| `export_documents` | `documents.export` | ❌ people only |
+| Tool | Server | Needs scope |
+|---|---|---|
+| `list_documents` | `tickmark` | `documents.read` |
+| `read_document` | `tickmark` | `documents.read` |
+| `run_vouch` | `tickmark` | `vouch.run` |
+| `export_documents` | — | not assigned: unknown tool |
 
 **Where Sara's role comes from:** not from Microsoft. The sign-in only proves *who* she is. Her
 role is her row in `members` for that engagement (Coke → Staff). No row, no access. Rows come from
@@ -526,7 +531,7 @@ role is her row in `members` for that engagement (Coke → Staff). No row, no ac
 | Sara reads Acme / Dana reads Coke | ❌ `engagement not found in your firm` |
 | Sara's read-only pass → `read_document` | ✅ |
 | same pass → `run_vouch` | ❌ `pass does not include vouch.run` |
-| Omar's agent with an export pass → `export_documents` | ❌ `export_documents may not be called by an agent` |
+| Omar's agent with an export pass → `export_documents` | ❌ `unknown tool: export_documents` |
 | `delete_everything` | ❌ `unknown tool: delete_everything` |
 
 ---
@@ -554,12 +559,15 @@ Authorization: Bearer <pass>
 2. `Decision.DecideTool` (a revoked pass is already a "no").
 3. `audit_log` row with `Action = tool`, the tool's scope, allowed, reason, `jti`;
    `SaveChangesAsync` before anything is forwarded. Revoked → **401**; denied → **403**.
-4. `IHttpClientFactory` client `"tools"` (`Tools:BaseUrl`, 5-minute timeout) → `POST tools/{tool}`
-   with `Authorization: Bearer <AgentPass.CreateForward(...)>` and the same JSON body. The tool's
-   status and body are returned as-is. `HttpRequestException` / timeout → **502** `tool_unavailable`.
+4. The tool's `upstream_tools` row → its `upstream_servers` row → `UpstreamMcp.Request` (client
+   `"upstream"`, 5-minute timeout): MCP `tools/call` with `Authorization: Bearer
+   <AgentPass.CreateForward(..., server.Audience)>` and the arguments untouched. The MCP result comes
+   back as-is (`McpResult`). `HttpRequestException` / timeout → **502** `tool_unavailable`.
+   The plain door (`ToolGateController`) unwraps it: the result's text → **200**; `isError` →
+   **422** `tool_error`. It stays for `warden_client.py` until step 19.
 
-The URL's `{tool}` is only forwarded after `DecideTool` found it in the fixed tool list, so it
-can't be used to reach other paths.
+Warden has no built-in tools (step 18b): the tool name only picks a row an admin made, so it can't
+be used to reach anything else.
 
 🖼️ **Picture**
 
@@ -613,7 +621,7 @@ so the sign-in stays Warden's own.
 | `initialize` | the client's protocol version if Warden knows it (`2025-03-26`, `2025-06-18`, `2025-11-25`), else the newest; `capabilities: { tools }` |
 | `notifications/initialized` (no `id`) | 202, no body |
 | `ping` | `{}` |
-| `tools/list` | the tools `Decision.DecideTool` allows for this pass right now, with description + input schema from `Permissions.Tools`. Export is never listed |
+| `tools/list` | the tools `Decision.DecideTool` allows for this pass right now, with description + input schema as each of the firm's servers describes them (`tools/list`, asked live). Export is never listed (never assigned) |
 | `tools/call` | `ToolGate.Run(..., engagement)`. Allowed → the tool's answer as `content[0].text`. Refused / tool down → same, with `isError: true`, so the agent's model reads the reason |
 | anything else | JSON-RPC error `-32601` |
 
@@ -624,8 +632,25 @@ so the sign-in stays Warden's own.
   `isError` result for `tools/call`.
 - Listing tools isn't an action, so `tools/list` isn't written to the audit log; every
   `tools/call` is, exactly like `POST /tools/{tool}/invoke`.
-- Today the client brings a pass from `/token/exchange`. Step 17 replaces that with the standard
-  MCP sign-in (Entra), turned into a pass by Warden itself.
+- **Sign-in (step 17).** A stock MCP client has no pass, only what Microsoft gave it:
+  1. no token → **401** `WWW-Authenticate: Bearer resource_metadata="<host>/.well-known/oauth-protected-resource/mcp/engagements/{id}"`
+     (only when Entra is set up; else plain `Bearer`)
+  2. that document (RFC 9728, `ProtectedResourceController`): `resource` = this address,
+     `authorization_servers` = `https://login.microsoftonline.com/<tenant>/v2.0`,
+     `scopes_supported` = `api://<Warden's client id>/access_as_user`
+  3. the client opens Microsoft's sign-in page and gets an Entra token: `aud` Warden, `azp` the agent's app
+  4. with that token, `Delegation.ForSession`: the pass for (this sign-in's `uti`/`jti`, this
+     engagement) is reused, or made: agent = `azp` → `agents`, scopes = agent ceiling ∩ the user's
+     role here, `Decide` + audit (`token.exchange`) + logbook row with `sign_in_id`. Refused →
+     **403** + reason. A revoked pass stays revoked for the rest of that sign-in.
+  A pass from `/token/exchange` still works too (`warden_client.py`).
+
+| Token at `/mcp` | Result |
+|---|---|
+| none / garbage | 401 + where to sign in |
+| Sara's sign-in (Tickmark's app), Coke | works; one pass for the whole session |
+| Sara's sign-in, Pepsi | 403 `ethical wall: Works on Coke 2026` |
+| a sign-in to an app no admin registered | 403 `unknown agent` |
 
 ### Behind the door: the firm's own MCP servers (step 18a)
 
@@ -685,8 +710,9 @@ no, or doesn't answer, it stops.
   + input schemas, from the tools' own request models), `tools/call` → the tool's JSON as text;
   a tool error (no such document, bad period, wrong arguments) → `isError: true`. Every message
   needs a Warden-forwarded token (`warden_claims`); `tools/call` only runs the tool the token names
-  (`warden_call`, else **403**). Stateless: no session id. Until step 18b's second half, Warden
-  still calls `/tools/*` over plain HTTP.
+  (`warden_call`, else **403**). Stateless: no session id. Since step 18b this is the only way
+  Warden reaches Tickmark: it's seeded as Firm A's upstream server `tickmark`. (`/tools/*` is still
+  there, but Warden no longer calls it.)
 - `src/tickmark/warden_client.py`: `exchange_token(scope, resource)` and `invoke(tool, payload)`;
   any non-200 or network error → `WardenDenied`.
 - `src/tickmark/agent.py` (`make agent TOKEN=… [ENG=…]`): exchange `documents.read vouch.run` →
@@ -872,7 +898,8 @@ user ↔ agent (the agent reads untrusted documents: treat it as compromisable),
 | 11 | path traversal | file name only, inside the token's engagement folder | `test_warden.py` |
 | 12 | outage = open access | client and tools fail closed | `test_warden.py` |
 | 13 | SCIM abuse | per-firm secret, constant-time compare, own users only, `active` only | `RevokeTests` |
-| 14 | forged / wrong-app / other-tenant Entra token (A07) | keys from metadata, issuer + audience pinned, must be linked | `EntraTests` |
+| 14 | forged / wrong-app / other-tenant Entra token (A07) | keys from metadata, issuer + audience pinned, must be linked | `McpSignInTests` | no token → 401 + where to sign in; signed-in agent works with one Warden-made pass, revoke sticks; wall and unknown agent refused |
+| `EntraTests` |
 | 15 | cost abuse (LLM10) | *not built*: credit reservation at the gate | — |
 | 16 | agent impersonation | *partial*: pass bound to the user's verified token; agent credentials later | — |
 
@@ -1034,8 +1061,9 @@ warden/
 | `POST /token/revoke` | sign-in | cancel your own pass |
 | `PATCH /scim/v2/Users/{id}` | firm SCIM secret | deactivate / reactivate |
 
-CLI (`dotnet run --project src/Warden.Api -- …`): `seed`, `dev-token <name>`,
-`link-entra <name> <tid> <oid>`.
+CLI (`dotnet run --project src/Warden.Api -- …`): `seed`, `dev-token <name> [agent]`,
+`link-entra <name> <tid> <oid>`, `register-agent <name> <client id> "<scopes>"`,
+`add-upstream "<firm>" <name> <url> <audience>`, `assign-tool "<firm>" <server> <tool> <scope>`.
 
 | Python world | .NET here |
 |---|---|
@@ -1100,7 +1128,6 @@ file, environment variables, then the command line. Real secrets never go in the
 | `DevIssuer:Key` | committed dev value, trusted only in Development | unused |
 | `Signing:PrivateKeyPem` | unset → fresh key each start (Development) | Key Vault |
 | `Token:LifetimeMinutes` | 15 | 15 |
-| `Tools:BaseUrl`, `Tools:Audience` | `http://localhost:8000/`, `tickmark-tools` | the tool service |
 | `Entra:TenantId`, `Entra:ClientId` | empty = Entra off | set |
 | `Scim:Tenants:<tenant id>` | unset = SCIM refuses | Key Vault |
 | Logging | EF SQL logging at Warning (keeps CLI output clean) | — |
@@ -1130,12 +1157,13 @@ promise. Every check was also broken on purpose once, to make sure its test real
 🔧 **Technically**
 
 - xUnit; `WardenFactory` (`WebApplicationFactory<Program>`) runs the API in memory against
-  database `warden_test` (migrated + seeded once), with a **fake tool server** (`FakeTools`,
-  records what the gate forwarded, can act "down"), a **fake Entra** (a test RSA key via
+  database `warden_test` (migrated + seeded once), with **fake MCP servers** (`FakeUpstream`:
+  answers for Tickmark's seeded address and a test document server, records every `tools/call`,
+  any address can act "down"), a **fake Entra** (a test RSA key via
   `StaticConfigurationManager`), and a test SCIM secret for Firm A.
 - Database classes share one factory in the `"database"` collection and run one at a time.
 - Tests that change people create their own users (`NewCokeStaff`), so the demo people stay intact.
-- **50 passed, 2 skipped** (credits, human approval: later). CI: `.github/workflows/warden.yml`.
+- **65 passed, 2 skipped** (credits, human approval: later). CI: `.github/workflows/warden.yml`.
 
 | Promise (`SecurityGuaranteeTests.cs`) |
 |---|
@@ -1155,9 +1183,9 @@ promise. Every check was also broken on purpose once, to make sure its test real
 | `TokenExchangeTests` | good pass; wall, other firm, unknown agent refused; bad scope 400 |
 | `PassCheckTests` | tampered, forged, sign-in token, unlogged, revoked refused |
 | `DecisionTests` | tool rules: scope on pass, no agent export, walls beat the pass, unknown tool |
-| `ToolGateTests` | forwarded with a 60-s token and logged; refusals never forwarded; 502 when down |
+| `ToolGateTests` | Tickmark's tools reached over MCP at the seeded server with a 60-s token, logged; refusals never forwarded; 502 when down |
 | `McpTests` | MCP: `tools/list` hides what the pass can't do; `tools/call` goes through the gate and is logged; no pass 401; Coke pass refused at Pepsi's address |
-| `UpstreamTests` | a firm's MCP server's tools: hidden until assigned; calls go through the gate with a token for that server and come back as-is; other firms see nothing; server down is skipped |
+| `UpstreamTests` | a firm's MCP server's tools: hidden until assigned; calls go through the gate with a token for that server and come back as-is; other firms see nothing; server down is skipped; no two servers share an audience |
 | `AuditTests` | UPDATE/DELETE/TRUNCATE refused; allowed + denied logged; per-firm reading |
 | `RevokeTests` | only you revoke your pass; SCIM secret, own firm, only `active` |
 | `EntraTests` | linked Entra account = its Warden user; unlinked / wrong app / other tenant / forged → 401 |
@@ -1167,7 +1195,7 @@ promise. Every check was also broken on purpose once, to make sure its test real
 ```mermaid
 flowchart TB
     F["WardenFactory<br/>API in memory"] --> DB[("warden_test")]
-    F --> FT["FakeTools<br/>records forwards"]
+    F --> FT["FakeUpstream<br/>fake MCP servers"]
     F --> FE["fake Entra key"]
     T1["tests in 'database'<br/>collection, one at a time"] --> F
 ```
@@ -1190,7 +1218,7 @@ cd warden
 docker compose up -d                              # Postgres :5433
 dotnet ef database update -p src/Warden.Api       # tables
 dotnet run --project src/Warden.Api -- seed       # demo world
-dotnet test                                       # 50 passed, 2 skipped
+dotnet test                                       # 65 passed, 2 skipped
 dotnet run --project src/Warden.Api               # Now listening on: http://localhost:5000
 ```
 
@@ -1205,7 +1233,7 @@ make run                                          # :8000
 **Terminal 3: be Sara**
 ```bash
 cd warden
-SARA=$(dotnet run --project src/Warden.Api --no-launch-profile -- dev-token sara)
+SARA=$(dotnet run --project src/Warden.Api --no-launch-profile -- dev-token sara tickmark)
 cd ../tickmark
 make agent TOKEN=$SARA                                              # Coke: ✅ ✅ ✅ ✅ ⚠️ ❓
 make agent TOKEN=$SARA ENG=e0000000-0000-0000-0000-000000000002    # Pepsi: ethical wall
@@ -1265,6 +1293,15 @@ minutes), tell Warden the two ids, and link your account to a demo user.
    curl -s localhost:5000/me -H "Authorization: Bearer $TOKEN"     # Sara's WARDEN ids
    cd ../tickmark && make agent TOKEN=$TOKEN
    ```
+   (`az` tokens are issued to the Azure CLI's app, so first `register-agent "Azure CLI"
+   04b07795-8ddb-461a-bbee-02f9e1bf7b46 "documents.read vouch.run"`, or Warden says `unknown agent`.)
+6. **A real agent over MCP (step 17)**: register the agent as its own app (App registrations → New,
+   public client, redirect URI the agent's MCP client uses, e.g. `http://localhost:<port>/callback`;
+   API permissions → Warden → `access_as_user`). Then
+   `dotnet run --project src/Warden.Api -- register-agent "<agent>" <its client id> "documents.read vouch.run"`,
+   and point the agent's MCP client at `http://localhost:5000/mcp/engagements/<id>` with that client id
+   (Entra has no dynamic client registration, so the client must be told it, e.g. Claude Code's
+   `claude mcp add --client-id`; check `claude mcp add --help`). It opens Microsoft's page, you sign in, done.
 
 | Symptom | Cause |
 |---|---|
@@ -1273,6 +1310,7 @@ minutes), tell Warden the two ids, and link your account to a demo user.
 | 401, `not linked to a Warden user` | step 4 missing |
 | 401, slow first request | Warden can't reach `login.microsoftonline.com` |
 | `AADSTS65001` from `az` | step 2's Azure CLI client application missing |
+| 403 `unknown agent` | the token's app (`azp`) isn't registered: `register-agent` |
 
 🖼️ **Picture**
 
@@ -1307,7 +1345,8 @@ to find and call tools. Then lock agents into a network where Warden is the only
 Trade-offs accepted:
 - one hop + one indexed lookup per tool call (calls are coarse: list, read, a whole vouching run)
 - revocation takes effect at the **next** call, not mid-call
-- the agent only names itself (`agent_id`); step 17a makes Entra prove it (client id in the token)
+- an agent is known by its Entra app (`azp`); a dev token says it by itself, so dev tokens stay dev-only
+- MCP sign-in passes get agent ceiling ∩ role, not a narrower ask: an MCP client can't ask for scopes per engagement
 - one Entra tenant; multi-tenant needs per-firm issuer checks
 - SCIM secrets in config; only `active` is synced (no user create/update, no groups)
 - audit reads unpaged; unreadable passes go to the app log only
@@ -1318,11 +1357,10 @@ Trade-offs accepted:
 Next (MVP.md Phase 9):
 - ~~16~~ done: `/mcp/engagements/{id}`: Warden speaks MCP (`initialize`, `tools/list` filtered per user +
   agent, `tools/call` → the existing gate)
-- **17** MCP sign-in: `/.well-known/oauth-protected-resource` (RFC 9728) → Entra; Warden turns the
-  token into a pass per session
+- ~~17 / 17a~~ done: MCP sign-in (RFC 9728 → Entra), Warden makes the pass per session; agent = token's `azp` (section 11)
 - ~~18~~ done: per-agent `allowed_scopes` (section 10)
 - ~~18a~~ done: Warden in front of any MCP server (section 11)
-- **18b** Tickmark's tools become one upstream MCP server like any other
+- ~~18b~~ done: Tickmark's tools are one upstream MCP server like any other (section 11)
 - **19** proof with a stock MCP client (Inspector / Claude Desktop), no Warden code inside it
 - **20** the lock: agents hold no keys, network reaches only Warden
 - **21** write-up vs existing MCP gateways and Entra Agent ID

@@ -11,6 +11,7 @@
  *   admin assigns delete_all      -> listed from the next tools/list on
  *   Firm B's agent                -> sees none of Firm A's server tools
  *   server down                   -> tools/list still works (that server is skipped); a call is an error
+ *   two firms, same audience      -> refused by the database: a token for one server can't open another
  */
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -98,8 +99,8 @@ public class UpstreamTests : IDisposable
         Assert.Equal("called search", ok.GetProperty("content")[0].GetProperty("text").GetString());
 
         // What the server received: its own one-minute token from Warden, the arguments untouched.
-        var (tool, token, body) = warden.Upstream.Calls.Single();
-        Assert.Equal("search", tool);
+        var (url, tool, token, body) = warden.Upstream.Calls.Single();
+        Assert.Equal((FakeUpstream.Url, "search"), (url, tool));
         Assert.Equal("""{"q":"invoice 42"}""", body);
         var sent = new JsonWebToken(token);
         Assert.NotEqual(pass, token);
@@ -125,11 +126,19 @@ public class UpstreamTests : IDisposable
     public async Task server_down_skips_it_in_the_list_and_fails_the_call()
     {
         var pass = await SaraReadsCoke();
-        warden.Upstream.Down = true;
+        warden.Upstream.Down.Add(FakeUpstream.Url);
 
         var names = await ToolNames(pass, DemoSeed.Coke);
-        Assert.Contains("read_document", names);  // the rest of the menu still works
+        Assert.Contains("read_document", names);  // Tickmark's server still answers: the rest of the menu works
         Assert.DoesNotContain("search", names);
         Assert.True((await Mcp(pass, DemoSeed.Coke, "tools/call", new { name = "search" })).GetProperty("isError").GetBoolean());
     }
+
+    [Fact]
+    public void two_servers_cannot_share_an_audience() =>
+        Assert.Throws<Microsoft.EntityFrameworkCore.DbUpdateException>(() => warden.WithDb(db =>
+        {
+            db.UpstreamServers.Add(new UpstreamServer { TenantId = DemoSeed.FirmB, Name = "copycat", Url = "http://b.test/mcp", Audience = "tickmark-tools" });
+            return db.SaveChanges();
+        }));
 }
