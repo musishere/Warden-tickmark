@@ -88,7 +88,7 @@ learns their tools from them. Tickmark is only the demo agent and demo tool serv
     (`tickmark`, `http://localhost:8000/mcp`, 3 tools assigned). Export is never assigned, so it's an
     unknown tool. (`/tools/{tool}/invoke` kept for `warden_client.py` until step 19-2 removed both.)
     One audience per server across all firms (unique index) — `two_servers_cannot_share_an_audience`
-- [ ] 19. Proof with a stock client: MCP Inspector (or Claude Desktop) pointed at Warden, no Warden
+- [x] 19. Proof with a stock client: MCP Inspector (or Claude Desktop) pointed at Warden, no Warden
   code: Coke works, Pepsi refused, export not offered, all in the audit log. Tickmark drops
   `warden_client.py` and uses a plain MCP client. A second, non-Tickmark MCP server behind Warden
   shows it isn't Tickmark-specific
@@ -99,7 +99,10 @@ learns their tools from them. Tickmark is only the demo agent and demo tool serv
   - [x] 19-2. Tickmark's agent uses a plain MCP client (`tickmark/src/tickmark/mcp_client.py`, nothing
     Warden-specific) with the user's sign-in token; `warden_client.py` and Warden's plain-HTTP
     `/tools/{tool}/invoke` door are gone: MCP is the only way in
-  - [ ] 19-3. A second, non-Tickmark MCP server behind Warden
+  - [x] 19-3. A second, non-Tickmark MCP server behind Warden: `examples/notes-server/server.py`
+    (official MCP SDK, defaults: sessions + event stream; trusts Warden's JWKS, aud `firm-a-notes`),
+    connected with `add-upstream` + `assign-tool` only. Coke menu = Tickmark's 3 + `list_notes`,
+    `read_note`; unassigned `delete_all_notes` hidden + refused; Pepsi walled; direct call 401
 - [ ] 20. The lock: agents hold no keys and can only reach Warden (Azure Container Apps network
   rules); Warden holds the keys to the real systems — `agent_container_cannot_reach_tools_directly`
 - [ ] 21. Write-up in docs/how-it-works.md: "integrating any agent without code changes", how Warden compares with

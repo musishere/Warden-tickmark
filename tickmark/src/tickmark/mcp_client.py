@@ -42,12 +42,18 @@ class McpClient:
     def tools(self) -> list[str]:
         return [t["name"] for t in self._rpc("tools/list", {})["tools"]]
 
-    def call(self, tool: str, arguments: dict) -> dict:
+    def call(self, tool: str, arguments: dict):
+        """The tool's answer: its structuredContent if it sent one, else its text (parsed if JSON)."""
         result = self._rpc("tools/call", {"name": tool, "arguments": arguments})
         text = "".join(c.get("text", "") for c in result.get("content", []))
         if result.get("isError"):
             raise Refused(f"{tool}: {text}")
-        return json.loads(text)
+        if "structuredContent" in result:
+            return result["structuredContent"]
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return text
 
     def _rpc(self, method: str, params: dict) -> dict:
         self._id += 1

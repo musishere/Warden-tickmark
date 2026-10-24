@@ -103,6 +103,19 @@ def test_client_sends_the_sign_in_token_and_returns_the_tools_answer():
     assert seen[0]["params"] == {"name": "list_documents", "arguments": {}}
 
 
+def test_client_takes_any_servers_answer_not_only_json_text():
+    """Other MCP servers (step 19-3) answer with structuredContent or plain text."""
+    def answer(msg):
+        if msg["params"]["name"] == "read_note":
+            return result(msg, "Two new suppliers this year")
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": msg["id"], "result": {
+            "content": [{"type": "text", "text": "kickoff"}], "structuredContent": {"result": ["kickoff"]}}})
+
+    with fake_server(answer) as mcp:
+        assert mcp.call("list_notes", {}) == {"result": ["kickoff"]}
+        assert mcp.call("read_note", {"title": "risks"}) == "Two new suppliers this year"
+
+
 def test_client_stops_on_any_warden_no():
     wall = fake_server(lambda m: httpx.Response(403, json={"reason": "ethical wall: Works on Coke 2026"}))
     with pytest.raises(Refused, match="ethical wall"), wall as mcp:  # refused before any tool: 403

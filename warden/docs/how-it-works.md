@@ -687,6 +687,26 @@ dotnet run --project src/Warden.Api --no-launch-profile -- assign-tool  "Firm A"
 - The upstream server trusts Warden by checking the token's signature against
   `/.well-known/jwks.json` and its `aud`. Servers that only take their own API key: not yet.
 
+**A second server that isn't Tickmark (step 19-3).** `examples/notes-server/server.py` holds a firm's
+notes per engagement. It's built with the official MCP Python SDK (`mcp` 2.3, `MCPServer`) on its
+default settings: streamable HTTP, sessions, answers sent as an event stream. Its only Warden-aware
+part is the same one any OAuth-protected MCP server has, a `TokenVerifier` that trusts Warden's JWKS
+with `aud = firm-a-notes`. Connecting it takes the two CLI lines and no Warden code:
+
+```
+uv run examples/notes-server/server.py                                   # :8100
+dotnet run -- add-upstream "Firm A" notes http://localhost:8100/mcp firm-a-notes
+dotnet run -- assign-tool  "Firm A" notes list_notes documents.read
+dotnet run -- assign-tool  "Firm A" notes read_note  documents.read
+```
+
+Live result: the agent's Coke menu = Tickmark's 3 tools + `list_notes`, `read_note`. Its third tool,
+`delete_all_notes`, is never assigned, so it's not on the menu and calling it gets `unknown tool`.
+Pepsi is refused by the ethical wall before either server is asked. Calling :8100 directly with the
+agent's pass gets 401. The notes calls show up in the audit log like Tickmark's.
+`mcp_client.call` now returns a server's `structuredContent` when it sends one, otherwise its text
+(parsed if it's JSON), because not every server answers with JSON text the way Tickmark does.
+
 ---
 
 ## 12. Tickmark behind Warden
