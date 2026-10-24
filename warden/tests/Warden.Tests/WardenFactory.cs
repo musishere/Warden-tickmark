@@ -156,13 +156,25 @@ public class WardenFactory : WebApplicationFactory<Program>
         return (await res.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("access_token").GetString()!;
     }
 
-    // What an agent does with a pass: POST /tools/{tool}/invoke.
-    public Task<HttpResponseMessage> Invoke(string? pass, string tool, object? args = null)
+    // What an agent does with a pass: MCP tools/call at its engagement's address (the pass's `eng`;
+    // Coke's for anything that isn't a readable pass). StatusCode is HTTP's (401 = no valid pass);
+    // a refused or failed call is a 200 with IsError and the reason in Text, as MCP does it.
+    public record Call(HttpStatusCode StatusCode, string Text, bool IsError);
+
+    public async Task<Call> Invoke(string? pass, string tool, object? args = null)
     {
+        var engagement = DemoSeed.Coke;
+        try { engagement = Guid.Parse(new JsonWebToken(pass).GetClaim("eng").Value); } catch (Exception) { }
         var client = CreateClient();
         if (pass is not null)
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", pass);
-        return client.PostAsJsonAsync($"/tools/{tool}/invoke", args ?? new { });
+        var res = await client.PostAsJsonAsync($"/mcp/engagements/{engagement}",
+            new { jsonrpc = "2.0", id = 1, method = "tools/call", @params = new { name = tool, arguments = args ?? new { } } });
+        var body = await res.Content.ReadAsStringAsync();
+        if (res.StatusCode != HttpStatusCode.OK)
+            return new Call(res.StatusCode, body, true);
+        var result = JsonDocument.Parse(body).RootElement.GetProperty("result");
+        return new Call(res.StatusCode, result.GetProperty("content")[0].GetProperty("text").GetString()!, result.GetProperty("isError").GetBoolean());
     }
 
     // A new agent registered for `allowedScopes`, made for one test. Used to check the layers

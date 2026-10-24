@@ -86,7 +86,7 @@ learns their tools from them. Tickmark is only the demo agent and demo tool serv
     `tickmark/tests/test_mcp.py`
   - [x] 18b-2. Warden drops the built-in list and plain-HTTP path; Tickmark is seeded as Firm A's upstream
     (`tickmark`, `http://localhost:8000/mcp`, 3 tools assigned). Export is never assigned, so it's an
-    unknown tool. `/tools/{tool}/invoke` stays for `warden_client.py` (forwards over MCP) until step 19.
+    unknown tool. (`/tools/{tool}/invoke` kept for `warden_client.py` until step 19-2 removed both.)
     One audience per server across all firms (unique index) — `two_servers_cannot_share_an_audience`
 - [ ] 19. Proof with a stock client: MCP Inspector (or Claude Desktop) pointed at Warden, no Warden
   code: Coke works, Pepsi refused, export not offered, all in the audit log. Tickmark drops
@@ -96,18 +96,27 @@ learns their tools from them. Tickmark is only the demo agent and demo tool serv
     front door (`OAuthFrontDoorController`: Entra refuses MCP's `resource`, AADSTS9010010), then:
     Coke list + vouch ✅, export not offered ✅, Pepsi 403 `ethical wall` ✅, all logged as agent
     "Claude Code" (from the token's `azp`) — `sign_in_goes_on_to_entra_without_the_resource_entra_refuses`
-  - [ ] 19-2. Tickmark's agent uses a plain MCP client instead of `warden_client.py`
+  - [x] 19-2. Tickmark's agent uses a plain MCP client (`tickmark/src/tickmark/mcp_client.py`, nothing
+    Warden-specific) with the user's sign-in token; `warden_client.py` and Warden's plain-HTTP
+    `/tools/{tool}/invoke` door are gone: MCP is the only way in
   - [ ] 19-3. A second, non-Tickmark MCP server behind Warden
 - [ ] 20. The lock: agents hold no keys and can only reach Warden (Azure Container Apps network
   rules); Warden holds the keys to the real systems — `agent_container_cannot_reach_tools_directly`
 - [ ] 21. Write-up in docs/how-it-works.md: "integrating any agent without code changes", how Warden compares with
   existing MCP gateways and Entra Agent ID
 
+- [ ] 22. Admin API + page: the CLI's jobs (`register-agent`, `add-upstream`, `assign-tool`, walls,
+  audit log) as screens for the firm's admin. Signed in with Microsoft; only users with the
+  "Warden Admin" app role (assigned in Entra) get in, and only to their own firm. The CLI stays
+  as the developer / emergency tool — `only_a_firm_admin_can_change_its_own_firm`
+
 ## Later
 Workspaces, not engagements: rename engagement → workspace in code, data and URLs
 (`/mcp/workspaces/{id}`); each firm picks the word its people see ("Engagement", "Matter",
 "Project"); membership comes from the firm's identity system (an Entra group per workspace,
-synced with SCIM Groups) instead of seed data. Token exchange already uses the standard
+synced with SCIM Groups) instead of seed data.
+Users arrive by SCIM too (create/update, not only deactivate), so `link-entra` isn't needed; a firm
+joins by its admin consenting to Warden as a multi-tenant Entra app. Token exchange already uses the standard
 `resource` field for it.
 
 Credits (reserve → settle, concurrency test), human approval (`override_requires_human_approval`),

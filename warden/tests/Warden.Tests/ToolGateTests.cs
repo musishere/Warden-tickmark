@@ -1,13 +1,15 @@
 /*
- * ToolGateTests.cs — steps 9-10: POST /tools/{tool}/invoke, with fake MCP servers (FakeUpstream).
+ * ToolGateTests.cs — steps 9-10: the gate, reached through MCP tools/call (the only door since
+ * step 19), with fake MCP servers (FakeUpstream).
  *
  *   Sara's pass (documents.read) -> read_document on Coke   -> sent over MCP to Firm A's "tickmark"
  *                                                             server (step 18b) with a 60-second token
  *                                                             for tickmark-tools, args untouched; logged
- *   no pass / garbage / a sign-in token instead of a pass    -> 401, nothing forwarded
- *   same pass -> run_vouch (scope not on the pass)           -> 403, nothing forwarded, logged
+ *   no pass / garbage                                       -> 401, nothing forwarded
+ *   a sign-in token issued to no registered agent           -> refused, nothing forwarded
+ *   same pass -> run_vouch (scope not on the pass)           -> refused (isError), nothing forwarded, logged
  *   revoked pass                                             -> 401 "pass revoked", logged
- *   tool server down                                         -> 502, not a crash
+ *   tool server down                                         -> an error result (tool_unavailable), not a crash
  * (Agents can't export: SecurityGuaranteeTests.prompt_injection_cannot_trigger_export.)
  */
 using System.Net;
@@ -38,9 +40,9 @@ public class ToolGateTests : IDisposable
         var pass = await SaraReadsCoke();
         var res = await warden.Invoke(pass, "read_document", new { name = "inv1.pdf" });
 
-        // The tool's answer (the text of its MCP result), as the plain door always gave it.
-        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-        Assert.Equal("called read_document", await res.Content.ReadAsStringAsync());
+        // The tool's answer (the text of its MCP result), passed on as-is.
+        Assert.False(res.IsError);
+        Assert.Equal("called read_document", res.Text);
 
         // Sent as MCP tools/call to the seeded server, nowhere else, with the arguments untouched.
         var (url, tool, token, body) = warden.Upstream.Calls.Single();
@@ -65,8 +67,8 @@ public class ToolGateTests : IDisposable
     {
         Assert.Equal(HttpStatusCode.Unauthorized, (await warden.Invoke(null, "read_document")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await warden.Invoke("not.a.pass", "read_document")).StatusCode);
-        var signIn = warden.SignIn(DemoSeed.Sara, DemoSeed.FirmA);  // a sign-in token is not a pass
-        Assert.Equal(HttpStatusCode.Unauthorized, (await warden.Invoke(signIn, "read_document")).StatusCode);
+        var signIn = warden.SignIn(DemoSeed.Sara, DemoSeed.FirmA);  // a sign-in, but by no registered agent
+        Assert.Contains("unknown agent", (await warden.Invoke(signIn, "read_document")).Text);
         Assert.Empty(warden.Upstream.Calls);
     }
 
@@ -76,8 +78,8 @@ public class ToolGateTests : IDisposable
         var pass = await SaraReadsCoke();
         var res = await warden.Invoke(pass, "run_vouch");
 
-        Assert.Equal(HttpStatusCode.Forbidden, res.StatusCode);
-        Assert.Contains("pass does not include vouch.run", await res.Content.ReadAsStringAsync());
+        Assert.True(res.IsError);
+        Assert.Contains("pass does not include vouch.run", res.Text);
         Assert.Empty(warden.Upstream.Calls);
         var jti = Guid.Parse(new JsonWebToken(pass).Id);
         Assert.False(warden.WithDb(db => db.AuditLog.Single(a => a.Jti == jti && a.Action == "run_vouch")).Allowed);
@@ -98,10 +100,12 @@ public class ToolGateTests : IDisposable
     }
 
     [Fact]
-    public async Task tool_server_down_is_a_502()
+    public async Task tool_server_down_is_an_error_not_a_crash()
     {
         var pass = await SaraReadsCoke();
         warden.Upstream.Down.Add(FakeUpstream.TickmarkUrl);
-        Assert.Equal(HttpStatusCode.BadGateway, (await warden.Invoke(pass, "read_document")).StatusCode);
+        var res = await warden.Invoke(pass, "read_document");
+        Assert.True(res.IsError);
+        Assert.Contains("tool_unavailable", res.Text);
     }
 }

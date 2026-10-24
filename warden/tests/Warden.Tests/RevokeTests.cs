@@ -31,7 +31,7 @@ public class RevokeTests(WardenFactory warden)
 
         var call = await warden.Invoke(pass, "read_document");
         Assert.Equal(HttpStatusCode.Unauthorized, call.StatusCode);
-        Assert.Contains("pass revoked", await call.Content.ReadAsStringAsync());
+        Assert.Contains("pass revoked", call.Text);
     }
 
     [Fact]

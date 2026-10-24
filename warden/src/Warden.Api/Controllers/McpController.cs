@@ -14,7 +14,7 @@
  *   tools/list                 -> ToolGate.List: only the tools this pass may call right now
  *                                 (built-in + the firm's upstream MCP servers' assigned tools),
  *                                 so export_documents is never listed
- *   tools/call                 -> Auth/ToolGate.cs, exactly like POST /tools/{tool}/invoke:
+ *   tools/call                 -> Auth/ToolGate.cs:
  *                                 pass -> decision -> audit log -> forward.
  *                                 Allowed -> the tool's answer as text. Refused -> isError: true +
  *                                 the reason, so the agent's model reads why ("ethical wall: ...").
@@ -26,7 +26,7 @@
  *     the user signs in at Microsoft. Warden makes the pass itself (Auth/Delegation.cs ForSession):
  *     this user, the agent the token was issued to (azp), this engagement. Refused (wall, not a
  *     member, unknown agent...) -> 403 with the reason, and it's in the audit log.
- *   - an agent PASS from /token/exchange (agents that get their own, like tickmark's warden_client).
+ *   - an agent PASS from /token/exchange (for an agent that asks for its own, narrower one).
  * Neither -> HTTP 401 + WWW-Authenticate: Bearer resource_metadata="<where to sign in>"
  * (RFC 9728, Controllers/ProtectedResourceController.cs). That's how an MCP client knows to open
  * Microsoft's sign-in page. A pass for another engagement -> refused (403, or a logged isError for tools/call).

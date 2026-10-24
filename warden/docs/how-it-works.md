@@ -51,7 +51,7 @@ Postgres triggers, and SCIM deprovisioning. It fails closed everywhere.
 |---|---|---|
 | 🪪 staff ID card | sign-in token (Entra or dev) | `Auth/DevIssuer.cs`, `Auth/EntraSignIn.cs` |
 | 🎫 visitor badge for the assistant | agent pass | `Auth/AgentPass.cs` |
-| 🛂 security desk | the gate | `Auth/ToolGate.cs` (doors: `Controllers/ToolGateController.cs`, `Controllers/McpController.cs`; to the firm's MCP servers: `Auth/UpstreamMcp.cs`) |
+| 🛂 security desk | the gate | `Auth/ToolGate.cs` (door: `Controllers/McpController.cs`; to the firm's MCP servers: `Auth/UpstreamMcp.cs`) |
 | 📋 the desk's rulebook | decision function | `Auth/Decision.cs`, `Warden.Core/Permissions.cs` |
 | 🎟️ one-time slip handed to the room | forwarded token | `AgentPass.CreateForward` |
 | 📒 badge register | logbook (`delegated_tokens`) | `Domain/DelegatedToken.cs` |
@@ -189,7 +189,7 @@ then lets the call through to the tool. Ask for Pepsi instead, and it stops at t
    `{resource, scope}` → pass (JWT) + logbook row + audit row. The agent is the sign-in token's `azp`.
    (An MCP client skips this: it sends the sign-in token to `/mcp/engagements/{id}` and Warden
    makes the pass itself, section 11.)
-2. `POST /tools/{tool}/invoke` with the pass → `AgentPass.Check` → `Decision.DecideTool` → audit
+2. MCP `tools/call` at `/mcp/engagements/{id}` with the pass → `AgentPass.Check` → `Decision.DecideTool` → audit
    row → MCP `tools/call` to the firm's server that owns the tool (`upstream_tools` → `upstream_servers`;
    for the demo tools that's Tickmark's `http://localhost:8000/mcp`) with a 60-second forwarded token.
 3. Tickmark's `/mcp` verifies the forwarded token against Warden's JWKS, runs the tool, answers;
@@ -211,12 +211,12 @@ sequenceDiagram
     W->>DB: rulebook: wall? member? role allows it?
     W->>DB: logbook row 📒 + audit row 📹
     W-->>T: 🎫 pass (15 min, Coke only, read + vouch)
-    T->>W: POST /tools/list_documents/invoke + 🎫
+    T->>W: MCP tools/call list_documents + 🎫
     W->>DB: pass real? not revoked? rulebook again, audit row 📹
     W->>K: forward with a 🎟️ 60-second token
     K-->>W: 5 invoices
     W-->>T: 5 invoices
-    T->>W: POST /tools/run_vouch/invoke + 🎫
+    T->>W: MCP tools/call run_vouch + 🎫
     W->>K: checked, logged, forwarded with a new 🎟️
     K-->>T: ✅ ✅ ✅ ✅ ⚠️ ❓ (through Warden)
     T-->>Sara: results
@@ -244,7 +244,7 @@ expiry, with `ClockSkew = 0` (expired means expired).
 | `aud` | `api://<client>` or client id / `warden` | `warden-tools` | the server's `upstream_servers.audience` (`tickmark-tools`) |
 | Lifetime | ~1 hour | 15 min (`Token:LifetimeMinutes`) | 60 s (`AgentPass.ForwardLifetime`) |
 | Held by | the user's agent (Entra issues it to the agent's app) | the agent, or only Warden (MCP sign-in) | Warden → tool; the agent never sees it |
-| Accepted by | Warden's normal endpoints + `/mcp` | `/tools/{tool}/invoke`, `/mcp` | only the tool server it names (`aud`) |
+| Accepted by | Warden's normal endpoints + `/mcp` | `/mcp` | only the tool server it names (`aud`) |
 | Key claims | `oid`, `tid`, `name`, `azp` (the agent's app), `uti`/`jti` | `sub`, `act.sub`, `tid`, `eng`, `scope`, `jti` | same + `tool`, `scope` (one), `pass` (= pass jti), new `jti` |
 | Revocable | by Entra | yes, by `jti` | expires almost at once |
 
@@ -545,13 +545,14 @@ unless all four say yes: is the pass real? does the rulebook allow it? write it 
 call on, not with the agent's pass, but with a fresh one-minute slip that names this one tool.
 If Warden can't write it down, nothing goes through: no record, no access.
 
-🔧 **Technically** (`Auth/ToolGate.cs`, reached through `Controllers/ToolGateController.cs`, `[AllowAnonymous]` because it checks the
+🔧 **Technically** (`Auth/ToolGate.cs`, reached through `Controllers/McpController.cs`, `[AllowAnonymous]` because it checks the
 pass itself)
 
 ```
-POST /tools/{tool}/invoke
-Authorization: Bearer <pass>
-{ ...the tool's own arguments, passed through untouched... }
+POST /mcp/engagements/{id}
+Authorization: Bearer <pass, or a sign-in token Warden turns into one>
+{ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+  "params": { "name": "<tool>", "arguments": { ...passed through untouched... } } }
 ```
 
 1. `AgentPass.Check`. No `Row` (unreadable, unknown) → **401** `invalid_token`, logged to the app
@@ -563,8 +564,7 @@ Authorization: Bearer <pass>
    `"upstream"`, 5-minute timeout): MCP `tools/call` with `Authorization: Bearer
    <AgentPass.CreateForward(..., server.Audience)>` and the arguments untouched. The MCP result comes
    back as-is (`McpResult`). `HttpRequestException` / timeout → **502** `tool_unavailable`.
-   The plain door (`ToolGateController`) unwraps it: the result's text → **200**; `isError` →
-   **422** `tool_error`. It stays for `warden_client.py` until step 19.
+   (Step 19 removed the plain-HTTP door `/tools/{tool}/invoke`: MCP is the only way in.)
 
 Warden has no built-in tools (step 18b): the tool name only picks a row an admin made, so it can't
 be used to reach anything else.
@@ -631,7 +631,7 @@ so the sign-in stays Warden's own.
   refused (`pass is for a different engagement`), as **403** for `tools/list`, and as a **logged**
   `isError` result for `tools/call`.
 - Listing tools isn't an action, so `tools/list` isn't written to the audit log; every
-  `tools/call` is, exactly like `POST /tools/{tool}/invoke`.
+  `tools/call` is.
 - **Sign-in (step 17).** A stock MCP client has no pass, only what Microsoft gave it:
   1. no token → **401** `WWW-Authenticate: Bearer resource_metadata="<host>/.well-known/oauth-protected-resource/mcp/engagements/{id}"`
      (only when Entra is set up; else plain `Bearer`)
@@ -646,7 +646,7 @@ so the sign-in stays Warden's own.
      engagement) is reused, or made: agent = `azp` → `agents`, scopes = agent ceiling ∩ the user's
      role here, `Decide` + audit (`token.exchange`) + logbook row with `sign_in_id`. Refused →
      **403** + reason. A revoked pass stays revoked for the rest of that sign-in.
-  A pass from `/token/exchange` still works too (`warden_client.py`).
+  A pass from `/token/exchange` still works too.
 
 | Token at `/mcp` | Result |
 |---|---|
@@ -716,13 +716,15 @@ no, or doesn't answer, it stops.
   (`warden_call`, else **403**). Stateless: no session id. Since step 18b this is the only way
   Warden reaches Tickmark: it's seeded as Firm A's upstream server `tickmark`. (`/tools/*` is still
   there, but Warden no longer calls it.)
-- `src/tickmark/warden_client.py`: `exchange_token(scope, resource)` and `invoke(tool, payload)`;
-  any non-200 or network error → `WardenDenied`.
-- `src/tickmark/agent.py` (`make agent TOKEN=… [ENG=…]`): exchange `documents.read vouch.run` →
-  `list_documents` → `run_vouch` → print verdicts; `WardenDenied` → exit 1.
-- Settings: `TICKMARK_WARDEN_URL`, `TICKMARK_AGENT_ID`, `TICKMARK_TOOLS_AUDIENCE`,
+- `src/tickmark/mcp_client.py` (step 19): a plain MCP client, nothing Warden-specific: `initialize`,
+  `tools/list`, `call(tool, args)` with a bearer token; a 401/403, an `isError` result, a JSON-RPC
+  error or no server → `Refused`.
+- `src/tickmark/agent.py` (`make agent TOKEN=… [ENG=…]`): connects to `/mcp/engagements/<ENG>` with
+  the user's sign-in token (Warden makes the pass) → `list_documents` → `run_vouch` → print
+  verdicts; `Refused` → exit 1.
+- Settings: `TICKMARK_WARDEN_URL`, `TICKMARK_TOOLS_AUDIENCE`,
   `TICKMARK_ENGAGEMENTS_DIR`. Demo files: `make warden-demo`.
-- Where the scope comes from: the agent's job. Vouching needs read + vouch, so that's hard-coded.
+- Where the scope comes from: Warden, not the agent: Tickmark's registration (`documents.read vouch.run`) ∩ the user's role on the engagement.
   The agent doesn't know Sara's rights; Warden compares.
 
 🖼️ **Picture**
@@ -1059,7 +1061,6 @@ warden/
 | `GET /.well-known/jwks.json` | none | Warden's public key |
 | `GET /me` | sign-in | who Warden thinks you are |
 | `POST /token/exchange` | sign-in | get an agent pass |
-| `POST /tools/{tool}/invoke` | agent pass | the gate |
 | `GET /audit?engagement=` | sign-in | an engagement's audit trail |
 | `POST /token/revoke` | sign-in | cancel your own pass |
 | `PATCH /scim/v2/Users/{id}` | firm SCIM secret | deactivate / reactivate |

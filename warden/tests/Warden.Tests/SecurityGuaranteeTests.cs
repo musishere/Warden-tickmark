@@ -63,7 +63,7 @@ public class SecurityGuaranteeTests(WardenFactory warden)
 
         var next = await warden.Invoke(pass, "read_document", new { name = "inv1.pdf" });
         Assert.Equal(HttpStatusCode.Unauthorized, next.StatusCode);
-        Assert.Contains("pass revoked", await next.Content.ReadAsStringAsync());
+        Assert.Contains("pass revoked", next.Text);
         var again = await warden.Exchange(leaver, DemoSeed.FirmA, DemoSeed.Tickmark, DemoSeed.Coke, "documents.read");
         Assert.Equal(HttpStatusCode.Forbidden, again.StatusCode);
         Assert.Contains("user deactivated", await again.Content.ReadAsStringAsync());
@@ -95,8 +95,8 @@ public class SecurityGuaranteeTests(WardenFactory warden)
         var pass = await warden.Pass(DemoSeed.Omar, DemoSeed.FirmA, DemoSeed.Coke, "documents.export", careless);
         var res = await warden.Invoke(pass, "export_documents", new { to = "attacker@example.com" });
 
-        Assert.Equal(HttpStatusCode.Forbidden, res.StatusCode);
-        Assert.Contains("unknown tool: export_documents", await res.Content.ReadAsStringAsync());
+        Assert.True(res.IsError);
+        Assert.Contains("unknown tool: export_documents", res.Text);
         Assert.Empty(warden.Upstream.Calls);
     }
     [Fact(Skip = "later: human approval")] public void override_requires_human_approval() { }

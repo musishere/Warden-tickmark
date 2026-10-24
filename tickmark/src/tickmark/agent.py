@@ -2,26 +2,29 @@
 
     python -m tickmark.agent --engagement <id> --token <the user's sign-in token> [--period A:B]
 
-1. trade the user's sign-in token for a pass: documents.read + vouch.run on that engagement only
-2. list_documents through Warden's gate
-3. run_vouch through Warden's gate
-Warden says no at any step (wall, not a member, revoked, Warden down) -> stop, exit code 1.
+Tickmark is a plain MCP client here (mcp_client.py): it connects to Warden's MCP address for the
+engagement with the user's sign-in token, the same way Claude Code or any stock agent does.
+Warden makes the pass itself, from the token: this user, this agent (the token says which app it
+was issued to), this engagement.
+1. list_documents
+2. run_vouch
+Warden says no at any step (wall, not a member, unknown agent, revoked, Warden down) -> stop, exit 1.
 Every step, allowed or not, is in Warden's audit log (GET /audit?engagement=).
 
-The sign-in token comes from the user (in dev: `dotnet run --project src/Warden.Api -- dev-token sara tickmark`: issued to Tickmark, so Warden knows which agent it is).
+The sign-in token comes from the user (in dev: `dotnet run --project src/Warden.Api -- dev-token sara tickmark`:
+issued to Tickmark, so Warden knows which agent it is; with Entra, the agent's own sign-in).
 """
 import argparse
 import sys
 
 from tickmark.config import settings
-from tickmark.warden_client import WardenClient, WardenDenied
+from tickmark.mcp_client import McpClient, Refused
 
 
-def vouch(client: WardenClient, engagement: str, period: str | None, currency: str | None) -> dict:
-    client.exchange_token("documents.read vouch.run", engagement)
-    docs = client.invoke("list_documents", {})["documents"]
+def vouch(mcp: McpClient, period: str | None, currency: str | None) -> dict:
+    docs = mcp.call("list_documents", {})["documents"]
     print(f"{len(docs)} documents: {', '.join(d['name'] for d in docs)}")
-    return client.invoke("run_vouch", {"period": period, "currency": currency})
+    return mcp.call("run_vouch", {"period": period, "currency": currency})
 
 
 def main() -> int:
@@ -32,8 +35,9 @@ def main() -> int:
     ap.add_argument("--currency")
     args = ap.parse_args()
     try:
-        result = vouch(WardenClient(settings.warden_url, args.token), args.engagement, args.period, args.currency)
-    except WardenDenied as e:
+        with McpClient(f"{settings.warden_url}/mcp/engagements/{args.engagement}", args.token) as mcp:
+            result = vouch(mcp, args.period, args.currency)
+    except Refused as e:
         print(f"Warden said no, stopping: {e}", file=sys.stderr)
         return 1
     for v in result["verdicts"]:

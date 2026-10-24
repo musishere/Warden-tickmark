@@ -1,9 +1,8 @@
 /*
  * ToolGate.cs — the gate itself: the ONLY code path from an agent to a tool.
  *
- * Two doors lead here, and both call Run(...), so neither can skip a step:
- *   POST /tools/{tool}/invoke      (Controllers/ToolGateController.cs, plain HTTP)
- *   /mcp/engagements/{id}          (Controllers/McpController.cs, MCP tools/call)
+ * One door leads here: /mcp/engagements/{id} (Controllers/McpController.cs, MCP tools/call).
+ * (Until step 19 there was also a plain-HTTP POST /tools/{tool}/invoke; every agent speaks MCP now.)
  *
  * In order. Nothing is forwarded unless every step says yes:
  *   1. check the pass (AgentPass.Check): Warden's signature, iss, aud = warden-tools, not

@@ -2,8 +2,9 @@
 
 Tools (api/tools.py): only a Warden-forwarded token for that tool gets in. A key pair made here
 stands in for Warden's (signing_key is swapped for its public half).
-Client (warden_client.py): anything but a 200 from Warden, or no Warden at all, is WardenDenied.
+Client (mcp_client.py): anything but a clean MCP result from Warden, or no Warden at all, is Refused.
 """
+import json
 import time
 import uuid
 
@@ -16,7 +17,7 @@ from fastapi.testclient import TestClient
 from tickmark.api import tools
 from tickmark.api.main import app
 from tickmark.config import settings
-from tickmark.warden_client import WardenClient, WardenDenied
+from tickmark.mcp_client import McpClient, Refused
 from tools.datagen.demo import easy
 
 WARDEN_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -73,22 +74,47 @@ def test_run_vouch_through_the_tool():
     assert " ".join(v["row_id"] + v["mark"] for v in r.json()["verdicts"]) == "E-1✅ E-2✅ E-3✅ E-4✅ E-5⚠️ E-6❓"
 
 
-def fake_warden(status: int, body: dict) -> WardenClient:
-    http = httpx.Client(base_url="http://warden", transport=httpx.MockTransport(lambda req: httpx.Response(status, json=body)))
-    return WardenClient("http://warden", "sign-in", http=http)
+def fake_server(answer) -> McpClient:
+    """An MCP server that answers initialize + the notification, and `answer(msg)` for the rest."""
+    def handle(req: httpx.Request) -> httpx.Response:
+        msg = json.loads(req.content)
+        if msg["method"] == "initialize":
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": msg["id"], "result": {"protocolVersion": "2025-06-18"}})
+        if "id" not in msg:
+            return httpx.Response(202)
+        return answer(msg)
+    return McpClient("http://warden/mcp/engagements/coke", "sign-in", http=httpx.Client(transport=httpx.MockTransport(handle)))
+
+
+def result(msg: dict, text: str, error: bool = False) -> httpx.Response:
+    return httpx.Response(200, json={"jsonrpc": "2.0", "id": msg["id"],
+                                     "result": {"content": [{"type": "text", "text": text}], "isError": error}})
+
+
+def test_client_sends_the_sign_in_token_and_returns_the_tools_answer():
+    seen = []
+
+    def answer(msg):
+        seen.append(msg)
+        return result(msg, '{"documents": []}')
+
+    with fake_server(answer) as mcp:
+        assert mcp.call("list_documents", {}) == {"documents": []}
+    assert seen[0]["params"] == {"name": "list_documents", "arguments": {}}
 
 
 def test_client_stops_on_any_warden_no():
-    with pytest.raises(WardenDenied, match="ethical wall"):
-        fake_warden(403, {"reason": "ethical wall: Works on Coke 2026"}).exchange_token("documents.read", COKE)
-    with pytest.raises(WardenDenied, match="no delegated token"):
-        fake_warden(200, {}).invoke("list_documents", {})
+    wall = fake_server(lambda m: httpx.Response(403, json={"reason": "ethical wall: Works on Coke 2026"}))
+    with pytest.raises(Refused, match="ethical wall"), wall as mcp:  # refused before any tool: 403
+        mcp.call("list_documents", {})
+    no_scope = fake_server(lambda m: result(m, "pass does not include vouch.run", error=True))
+    with pytest.raises(Refused, match="pass does not include"), no_scope as mcp:  # a refused call: isError
+        mcp.call("run_vouch", {})
 
 
 def test_client_stops_when_warden_is_down():
     def down(req):
         raise httpx.ConnectError("connection refused")
 
-    http = httpx.Client(base_url="http://warden", transport=httpx.MockTransport(down))
-    with pytest.raises(WardenDenied, match="warden unavailable"):
-        WardenClient("http://warden", "sign-in", http=http).exchange_token("documents.read", COKE)
+    with pytest.raises(Refused, match="server unavailable"):
+        McpClient("http://warden/mcp", "sign-in", http=httpx.Client(transport=httpx.MockTransport(down))).__enter__()
