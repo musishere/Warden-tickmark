@@ -15,6 +15,7 @@
  *   4. Run: starts the HTTP server and blocks until it stops.
  *
  * Command-line extras (run, do the job, exit):
+ *   dotnet run -- migrate          bring the database up to the newest migration (deploys run this)
  *   dotnet run -- seed             insert the demo data (Data/DemoSeed.cs)
  *   dotnet run -- dev-token sara [tickmark]   print a dev sign-in token for a demo user (issued to that agent)
  *   dotnet run -- link-entra sara <tid> <oid>   let a real Entra account sign in as that user
@@ -91,6 +92,17 @@ builder.Services.AddAuthorizationBuilder().SetFallbackPolicy(new AuthorizationPo
     .Build());
 
 var app = builder.Build();
+
+// `dotnet run -- migrate` (in the container: `dotnet Warden.Api.dll migrate`): bring the database up to
+// the newest migration, then exit (step 24). Safe to run on every deploy: already-applied ones are skipped.
+// Like `prisma migrate deploy`; here because the production image has no SDK for `dotnet ef`.
+if (args.Contains("migrate"))
+{
+    using var scope = app.Services.CreateScope();
+    scope.ServiceProvider.GetRequiredService<WardenDbContext>().Database.Migrate();
+    Console.WriteLine("Database up to date.");
+    return;
+}
 
 // `dotnet run -- seed`: insert the demo data (Data/DemoSeed.cs), then exit instead of serving.
 // CreateScope gives a short-lived set of services, like opening and closing a DB session.

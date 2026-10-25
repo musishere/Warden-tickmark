@@ -113,6 +113,18 @@ learns their tools from them. Tickmark is only the demo agent and demo tool serv
   "Warden Admin" app role (assigned in Entra) get in, and only to their own firm. The CLI stays
   as the developer / emergency tool — `only_a_firm_admin_can_change_its_own_firm`
 
+### Phase 10 — Go live
+Goal: Warden runs in Azure at a public https address, and a stock client (Claude Desktop, VS Code)
+signs in to it like any other MCP server. Order: 23 → 24 → 22 (built locally, so the free-trial clock isn't spent on it) → 25 → 14 → 20 → 21.
+
+- [x] 23. Behind a proxy, Warden gives its public `https://` address (built-in switch
+  `ForwardedHeaders_Enabled=true`, set only where a proxy sits in front) —
+  `behind_a_proxy_warden_gives_its_public_https_address`
+- [x] 24. `dotnet run -- migrate`: apply database migrations, so a deploy can set up the database
+  (checked on an empty database: 10 migrations applied, a second run changes nothing)
+- [ ] 25. Deploy: Azure Container Apps + Azure Database for PostgreSQL + Key Vault (signing key,
+  connection string, SCIM secrets), deployed from GitHub Actions
+
 ## Later
 Workspaces, not engagements: rename engagement → workspace in code, data and URLs
 (`/mcp/workspaces/{id}`); each firm picks the word its people see ("Engagement", "Matter",

@@ -956,7 +956,8 @@ to is refused, so nothing disappears by accident.
 
 - EF Core code-first: classes in `Warden.Core/Domain/`, keys and relations in
   `Data/WardenDbContext.cs`, SQL generated into `Data/Migrations/` with
-  `dotnet ef migrations add <Name>`, applied with `dotnet ef database update`.
+  `dotnet ef migrations add <Name>`, applied with `dotnet ef database update` on a dev machine, or `dotnet run -- migrate`
+  (`dotnet Warden.Api.dll migrate` in the container, which has no SDK) on deploy (step 24).
 - snake_case names (`EFCore.NamingConventions`); every FK `ON DELETE RESTRICT`.
 - `members` and `ethical_walls` keyed on `(engagement_id, user_id)`; `users` unique
   `(tenant_id, email)` and unique `(entra_tenant_id, entra_object_id)`.
@@ -1154,6 +1155,7 @@ file, environment variables, then the command line. Real secrets never go in the
 | `Token:LifetimeMinutes` | 15 | 15 |
 | `Entra:TenantId`, `Entra:ClientId` | empty = Entra off | set |
 | `Scim:Tenants:<tenant id>` | unset = SCIM refuses | Key Vault |
+| `ForwardedHeaders_Enabled` | unset (no proxy in front) | `true`: the proxy's `X-Forwarded-Proto` makes every address Warden hands out `https://` (step 23) |
 | Logging | EF SQL logging at Warning (keeps CLI output clean) | — |
 
 - `dotnet run` uses `Properties/launchSettings.json` → Development on `:5000`. One-shot commands

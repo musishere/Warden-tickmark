@@ -17,6 +17,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Hosting;
 using Warden.Api.Data;
 using Xunit;
 
@@ -61,6 +62,25 @@ public class McpSignInTests : IDisposable
         Assert.Equal($"http://localhost/mcp/engagements/{DemoSeed.Coke}", meta.GetProperty("resource").GetString());
         Assert.Equal("http://localhost", meta.GetProperty("authorization_servers")[0].GetString());
         Assert.Equal($"api://{WardenFactory.FakeEntraClient}/access_as_user", meta.GetProperty("scopes_supported")[0].GetString());
+    }
+
+    // Step 23: in Azure a proxy takes the https call and passes plain http to Warden, saying what it
+    // was in X-Forwarded-Proto (the Host header it keeps as the caller sent it). With
+    // ForwardedHeaders_Enabled (a built-in ASP.NET Core switch, set only where Warden runs behind a
+    // proxy), every address Warden hands out is the public https one; MCP clients refuse an http
+    // sign-in address.
+    [Fact]
+    public async Task behind_a_proxy_warden_gives_its_public_https_address()
+    {
+        var client = warden.WithWebHostBuilder(b => b.UseSetting("ForwardedHeaders_Enabled", "true")).CreateClient();
+        client.BaseAddress = new Uri("http://warden.example.com");
+        client.DefaultRequestHeaders.Add("X-Forwarded-Proto", "https");
+
+        var meta = await client.GetFromJsonAsync<JsonElement>($"/.well-known/oauth-protected-resource/mcp/engagements/{DemoSeed.Coke}");
+        Assert.Equal($"https://warden.example.com/mcp/engagements/{DemoSeed.Coke}", meta.GetProperty("resource").GetString());
+        Assert.Equal("https://warden.example.com", meta.GetProperty("authorization_servers")[0].GetString());
+        var door = await client.GetFromJsonAsync<JsonElement>("/.well-known/oauth-authorization-server");
+        Assert.Equal("https://warden.example.com/oauth/authorize", door.GetProperty("authorization_endpoint").GetString());
     }
 
     [Fact]

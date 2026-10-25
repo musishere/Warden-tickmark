@@ -15,7 +15,7 @@
  *
  * The path after oauth-protected-resource is the address it describes (RFC 9728 section 3.1);
  * with nothing after it, Warden as a whole. 404 when Entra isn't set up: there's nowhere to sign in.
- * ponytail: the address is built from the request's Host; behind a proxy, set forwarded headers (step 20).
+ * The address is built from the request; behind a proxy, set ForwardedHeaders_Enabled=true (step 23).
  */
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
