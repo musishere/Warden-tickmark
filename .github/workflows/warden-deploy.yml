@@ -1,0 +1,54 @@
+# warden-deploy.yml — build Warden + the demo notes server, push to GitHub Container Registry, deploy to
+# Azure with infra/deploy.sh (step 25). Runs only when started by hand (Actions -> warden-deploy -> Run),
+# so nothing in Azure changes, or costs, by accident.
+#
+# One-time setup (docs/how-it-works.md §25):
+#   - an Entra app registration for GitHub with a federated credential for this repo (no secret stored),
+#     given Owner on the resource group (it creates role assignments for Key Vault)
+#   - repo variables: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, ENTRA_CLIENT_ID (Warden's app),
+#     optional RESOURCE_GROUP, LOCATION
+#   - after the first run: make both ghcr.io packages public (they hold no secrets), or Azure can't pull them
+name: warden-deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write   # push images to ghcr.io
+  id-token: write   # sign in to Azure with GitHub's OIDC token, no stored password
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: azure
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and push images
+        run: |
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          echo "WARDEN_IMAGE=ghcr.io/$owner/warden:${{ github.sha }}" >> "$GITHUB_ENV"
+          echo "NOTES_IMAGE=ghcr.io/$owner/warden-notes:${{ github.sha }}" >> "$GITHUB_ENV"
+          docker build -t ghcr.io/$owner/warden:${{ github.sha }} warden
+          docker build -t ghcr.io/$owner/warden-notes:${{ github.sha }} warden/examples/notes-server
+          docker push ghcr.io/$owner/warden:${{ github.sha }}
+          docker push ghcr.io/$owner/warden-notes:${{ github.sha }}
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy
+        env:
+          ENTRA_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          ENTRA_CLIENT_ID: ${{ vars.ENTRA_CLIENT_ID }}
+          RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP || 'warden' }}
+          LOCATION: ${{ vars.LOCATION || 'westeurope' }}
+          DEPLOYER_TYPE: ServicePrincipal
+        run: |
+          export DEPLOYER_OBJECT_ID=$(az ad sp show --id "${{ vars.AZURE_CLIENT_ID }}" --query id -o tsv)
+          warden/infra/deploy.sh

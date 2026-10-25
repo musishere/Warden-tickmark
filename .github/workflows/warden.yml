@@ -1,0 +1,52 @@
+name: warden
+
+on:
+  push:
+    paths: ["warden/**", ".github/workflows/warden.yml"]
+  pull_request:
+    paths: ["warden/**", ".github/workflows/warden.yml"]
+
+defaults:
+  run:
+    working-directory: warden
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:  # same credentials and port as docker-compose.yml
+        image: postgres:17
+        env:
+          POSTGRES_USER: warden
+          POSTGRES_PASSWORD: warden
+          POSTGRES_DB: warden
+        ports: ["5433:5432"]
+        options: --health-cmd "pg_isready -U warden" --health-interval 2s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - run: dotnet test
+
+  # The admin page is committed pre-built (src/Warden.Api/wwwroot/admin), so `dotnet run`, the tests and
+  # the Docker image need no Node. This job rebuilds it from admin-ui/ and fails if the committed build
+  # doesn't match the source: run `npm run build` in warden/admin-ui and commit the result.
+  admin-ui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: warden/admin-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: warden/admin-ui/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: Committed build matches the source
+        run: |
+          git status --porcelain -- ../src/Warden.Api/wwwroot/admin
+          test -z "$(git status --porcelain -- ../src/Warden.Api/wwwroot/admin)"

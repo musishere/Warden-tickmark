@@ -1,3 +1,8 @@
+<!--
+  Warden.Tests.csproj: the test project. `dotnet test` finds and runs it.
+    xunit + runner + Test.Sdk: the test framework (like pytest).
+    Mvc.Testing: starts the API in memory for tests (WebApplicationFactory).
+-->
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <IsPackable>false</IsPackable>

@@ -1,0 +1,22 @@
+<!doctype html>
+<!--
+  Warden's admin page (step 22g), served by Warden at /admin/. Source: warden/admin-ui (React + shadcn/ui),
+  built into src/Warden.Api/wwwroot/admin with `npm run build`. The page is public; its data comes from
+  /admin/... and needs a Microsoft sign-in with the Warden.Admin role (AdminController.cs).
+  CSP: scripts only from Warden (no inline script); network calls only to Warden and Microsoft sign-in.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://login.microsoftonline.com; img-src 'self' data:; base-uri 'none'; form-action 'self' https://login.microsoftonline.com" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <title>Warden admin</title>
+    <script type="module" crossorigin src="./assets/index-DeiJVflF.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-BNc-LN1c.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

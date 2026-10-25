@@ -1,32 +1,158 @@
-# Warden: MVP scope
+# Warden: MVP plan
 
-Goal: prove one claim end to end. An agent acts for a user with a narrow,
-short-lived token, every tool call is authorized centrally, and every decision is logged.
+Goal: prove one claim end to end. An agent acts for a user with a narrow, short-lived pass, every
+tool call is authorized centrally, and every decision is logged.
 
-## In scope
-- [ ] Entra ID JWT validation (`tid`, `oid`); tenant taken from the verified token only
-- [ ] `POST /token/exchange`: delegated token with `sub` + `act`, scope, resource, audience, 15 min expiry, `jti`
-- [ ] Engagements, members and roles; ethical walls as deny rules that override everything
-- [ ] `POST /tools/{tool}/invoke`: authorize, then log, then forward. Fail closed
-- [ ] Append-only `audit_log` and `GET /audit?engagement=`
-- [ ] Token revocation by `jti`
-- [ ] PostgreSQL via EF Core; Docker Compose for local dev
-- [ ] Security tests (see `tests/Warden.Tests/SecurityGuaranteeTests.cs`):
-  - `agent_cannot_exceed_user_permissions`
-  - `ethical_wall_blocks_even_admin`
-  - `expired_delegated_token_is_rejected`
-  - `tenant_a_cannot_read_tenant_b`
-  - `prompt_injection_cannot_trigger_export`
+Each step is small: a few files, one test that proves it, and a commit.
 
-## Deferred (after MVP)
-- Credits: reserve → settle ledger and the concurrency test
-- Human approval flow (`override_requires_human_approval`)
-- SCIM deactivation → revoke all agent tokens
-- Policy engine beyond simple per-tool allow/deny
-- MCP-compatible proxy
-- Azure Container Apps deploy, Service Bus
-- Dashboard UI
+## Design calls
+- C# / .NET 10, ASP.NET Core controllers, EF Core, PostgreSQL (host port 5433).
+- Sign-in: a local dev issuer first (offline, tests); Microsoft Entra ID in phase 7, same code path.
+- Agent passes: Warden-signed JWTs, 15 min, `sub` = user, `act` = agent, engagement, scope, `jti`.
+  Request shape follows OAuth token exchange (RFC 8693).
+- A real proxy: Tickmark's tools sit behind Warden and accept only calls Warden forwards.
+- Audit log: append-only, enforced by a database trigger.
+- Fail closed: if Warden cannot decide, the answer is no.
 
-## Done when
-Tickmark can vouch invoices through Warden, a wall-blocked request is denied and
-logged, and the five MVP security tests pass in CI.
+## Steps
+
+### Phase 0 — Ready to build
+- [x] 1. `dotnet` on PATH, Postgres via Docker Compose, CI runs `dotnet test`
+
+### Phase 1 — The data
+- [x] 2. Tenants, users, agents, engagements, members (roles); first migration
+- [x] 3. Ethical walls + demo seed (Firm A: Coke, Pepsi with a wall; Firm B: Acme; Sara, Ali, admin; Tickmark agent)
+
+### Phase 2 — Identity
+- [x] 4. Validate the user's sign-in token; tenant from the verified token only
+- [x] 5. Warden's signing key + JWKS endpoint
+- [x] 6. `POST /token/exchange` (stored by `jti`) — `agent_cannot_exceed_user_permissions`, `expired_delegated_token_is_rejected`
+
+### Phase 3 — The rules
+- [x] 7. Decision function: walls → membership → role → tool policy → scope, with a reason — `ethical_wall_blocks_even_admin`, `tenant_a_cannot_read_tenant_b`
+- [x] 8. Append-only audit log + `GET /audit?engagement=`
+
+### Phase 4 — The gate
+- [x] 9. `POST /tools/{tool}/invoke`: check pass (signature, expiry, audience, not revoked) → decide → log → forward; any error = deny
+- [x] 10. Tools: `list_documents`, `read_document`, `run_vouch`; `export_documents` denied to agents — `prompt_injection_cannot_trigger_export`
+
+### Phase 5 — Tickmark through Warden
+- [x] 11. Tickmark's tool endpoints accept only Warden-forwarded calls
+- [x] 12. Tickmark vouches via `WardenClient`: Coke allowed, Pepsi denied, both logged
+
+### Phase 6 — The off switch
+- [x] 13. Revoke by `jti` + `PATCH /scim/v2/Users/{id}` revokes all agent passes; running work stops — `scim_deactivation_revokes_agent_tokens`
+
+### Phase 7 — Real Entra ID
+- [ ] 14. Entra test tenant app registration; accept Entra tokens (`tid`, `oid`) — code + fake-Entra tests done; the real app registration is a manual step: [docs/how-it-works.md §22](docs/how-it-works.md#22-real-microsoft-entra-id-setup)
+
+### Phase 8 — Write it up
+- [x] 15. RFC, threat model, README (problem → architecture → trade-offs)
+
+### Phase 9 — Any agent, no code changes (Warden as an MCP gateway)
+Goal: a client's agent, built with anything, is pointed at Warden by changing one setting (its MCP
+tool server address). No Warden code inside the agent. And it can't go around Warden.
+Warden is for any agent and any tool server: it sits in front of the firm's own MCP servers and
+learns their tools from them. Tickmark is only the demo agent and demo tool server.
+
+- [x] 16. `/mcp/engagements/{id}`: Warden speaks MCP (JSON-RPC over Streamable HTTP): `initialize`,
+  `tools/list` (only the tools this user + agent may use; export never listed), `tools/call` →
+  the existing gate (pass check → decision → audit log → forward). One URL per engagement, so
+  "which client" is part of the address — `mcp_call_is_checked_and_logged_like_any_tool_call`
+- [x] 17. MCP sign-in, the standard way: `/.well-known/oauth-protected-resource` (RFC 9728) pointing
+  at Entra; 401 + `WWW-Authenticate` when no token; Warden turns the Entra token into a pass
+  itself, per session — `mcp_client_without_sign_in_gets_401_with_where_to_sign_in`
+- [x] 17a. Any agent, proven: the agent is who Entra says it is, not who it claims. Each agent is
+  an Entra app registration; Warden reads the client id from the signed token (`azp`) and maps it
+  to a row in `agents` (like `link-entra` does for users). Unknown client id → refused until the
+  firm's admin registers it: `dotnet run -- register-agent "<name>" <entra client id> "<allowed scopes>"`.
+  Token exchange stops trusting the `agent_id` in the request body —
+  `unknown_agent_is_refused_even_with_a_valid_sign_in`
+  (17 + 17a built together: with MCP sign-in, the agent can only be known from the token.
+  Done: `ProtectedResourceController`, `Auth/Delegation.cs`, `agents.entra_client_id`,
+  `delegated_tokens.sign_in_id`. Real Entra end to end needs step 14's app registration.)
+- [x] 18. Per-agent ceiling: each registered agent gets `allowed_scopes`; a pass is
+  agent ceiling ∩ user's rights ∩ what was asked — `agent_cannot_exceed_its_registration`
+- [x] 18a. Warden in front of any MCP server: the firm's admin connects upstream MCP servers
+  (address + how Warden signs in to each; agents never see either). `tools/list` asks each upstream
+  for its tools; a per-tool table maps each one to a scope. A tool with no scope assigned is hidden
+  and refused (fail closed: a tool an upstream adds tomorrow stays off until an admin says so).
+  `tools/call` → the gate → the upstream that owns the tool —
+  `upstream_tool_is_hidden_until_an_admin_assigns_a_scope`
+- [x] 18b. Tickmark's tools become one MCP server behind Warden, like any other. Remove the
+  hand-written `Permissions.Tools` menu, `Tools:BaseUrl` and the plain-HTTP forward path, so every
+  tool takes the same route — `tickmark_tools_work_as_an_upstream_mcp_server`
+  - [x] 18b-1. Tickmark serves its tools over MCP at `/mcp` (`tickmark/src/tickmark/api/mcp.py`) —
+    `tickmark/tests/test_mcp.py`
+  - [x] 18b-2. Warden drops the built-in list and plain-HTTP path; Tickmark is seeded as Firm A's upstream
+    (`tickmark`, `http://localhost:8000/mcp`, 3 tools assigned). Export is never assigned, so it's an
+    unknown tool. (`/tools/{tool}/invoke` kept for `warden_client.py` until step 19-2 removed both.)
+    One audience per server across all firms (unique index) — `two_servers_cannot_share_an_audience`
+- [x] 19. Proof with a stock client: MCP Inspector (or Claude Desktop) pointed at Warden, no Warden
+  code: Coke works, Pepsi refused, export not offered, all in the audit log. Tickmark drops
+  `warden_client.py` and uses a plain MCP client. A second, non-Tickmark MCP server behind Warden
+  shows it isn't Tickmark-specific
+  - [x] 19-1. Claude Code (stock, `--client-id`) signs in at Microsoft's real page through Warden's
+    front door (`OAuthFrontDoorController`: Entra refuses MCP's `resource`, AADSTS9010010), then:
+    Coke list + vouch ✅, export not offered ✅, Pepsi 403 `ethical wall` ✅, all logged as agent
+    "Claude Code" (from the token's `azp`) — `sign_in_goes_on_to_entra_without_the_resource_entra_refuses`
+  - [x] 19-2. Tickmark's agent uses a plain MCP client (`tickmark/src/tickmark/mcp_client.py`, nothing
+    Warden-specific) with the user's sign-in token; `warden_client.py` and Warden's plain-HTTP
+    `/tools/{tool}/invoke` door are gone: MCP is the only way in
+  - [x] 19-3. A second, non-Tickmark MCP server behind Warden: `examples/notes-server/server.py`
+    (official MCP SDK, defaults: sessions + event stream; trusts Warden's JWKS, aud `firm-a-notes`),
+    connected with `add-upstream` + `assign-tool` only. Coke menu = Tickmark's 3 + `list_notes`,
+    `read_note`; unassigned `delete_all_notes` hidden + refused; Pepsi walled; direct call 401
+- [ ] 20. The lock: agents hold no keys and can only reach Warden (Azure Container Apps network
+  rules); Warden holds the keys to the real systems — `agent_container_cannot_reach_tools_directly`
+  — built into `infra/main.bicep` (tool servers: internal ingress only, no public address) + checked by
+  `infra/check-lock.sh`; ticked once it passes against the real deploy. Egress lock for agents hosted
+  in Azure (VNet + NSG) is the next layer (how-it-works §25)
+- [x] 21. Write-up in docs/how-it-works.md: "integrating any agent without code changes", how Warden compares with
+  existing MCP gateways and Entra Agent ID — how-it-works §26
+
+- [x] 22. Admin API + page: the CLI's jobs (`register-agent`, `add-upstream`, `assign-tool`, walls,
+  audit log) as screens for the firm's admin. Signed in with Microsoft; only users with the
+  "Warden Admin" app role (assigned in Entra) get in, and only to their own firm. The CLI stays
+  as the developer / emergency tool — `only_a_firm_admin_can_change_its_own_firm`
+  - [x] 22a. Admin sign-in: `Warden.Admin` app role AND signed in at Warden's own app (`azp` =
+    Warden's client id), so an admin's agent is never an admin; dev tokens never; `GET /admin/firm` —
+    `only_a_warden_admin_signed_in_at_the_admin_page_gets_in`
+  - [x] 22b. People + memberships (link a Microsoft account, add to an engagement with a role);
+    `audit_log.engagement_id` optional for firm-wide admin rows — `only_a_firm_admin_can_change_its_own_firm`
+  - [x] 22c. Engagements + ethical walls — `an_ethical_wall_set_by_the_admin_beats_every_role`
+  - [x] 22d. Agents (register, allowed scopes); registrations are now PER FIRM (`agents.tenant_id`),
+    checked at sign-in mapping and in Decide; `register-agent` takes the firm first —
+    `an_agent_the_admin_allows_works_for_that_firm_only_up_to_its_ceiling`
+  - [x] 22e. Tool servers + tool scopes (lists what a server offers, live) —
+    `a_connected_servers_tool_stays_hidden_until_the_admin_assigns_it`
+  - [x] 22f. Audit log view (firm-wide, newest first, paged) — `the_admin_audit_log_is_the_whole_firm_newest_first_and_paged`
+  - [x] 22g. The page itself (served by Warden at `/admin/`, Microsoft sign-in with PKCE, no libraries) —
+    `the_admin_page_is_public_and_says_where_to_sign_in`; `add-firm` CLI creates a firm + its first admin
+
+### Phase 10 — Go live
+Goal: Warden runs in Azure at a public https address, and a stock client (Claude Desktop, VS Code)
+signs in to it like any other MCP server. Order: 23 → 24 → 22 (built locally, so the free-trial clock isn't spent on it) → 25 → 14 → 20 → 21.
+
+- [x] 23. Behind a proxy, Warden gives its public `https://` address (built-in switch
+  `ForwardedHeaders_Enabled=true`, set only where a proxy sits in front) —
+  `behind_a_proxy_warden_gives_its_public_https_address`
+- [x] 24. `dotnet run -- migrate`: apply database migrations, so a deploy can set up the database
+  (checked on an empty database: 10 migrations applied, a second run changes nothing)
+- [ ] 25. Deploy: Azure Container Apps + Azure Database for PostgreSQL + Key Vault (signing key,
+  connection string), deployed from GitHub Actions — code done and checked locally (`infra/main.bicep`
+  builds + lints clean, both images build, Production config runs: dev tokens 401, https addresses,
+  admin page served); ticked after the first real `infra/deploy.sh` (needs your `az login`, how-it-works §25)
+
+## Later
+Workspaces, not engagements: rename engagement → workspace in code, data and URLs
+(`/mcp/workspaces/{id}`); each firm picks the word its people see ("Engagement", "Matter",
+"Project"); membership comes from the firm's identity system (an Entra group per workspace,
+synced with SCIM Groups) instead of seed data.
+Users arrive by SCIM too (create/update, not only deactivate), so `link-entra` isn't needed; a firm
+joins by its admin consenting to Warden as a multi-tenant Entra app. Token exchange already uses the standard
+`resource` field for it.
+
+Credits (reserve → settle, concurrency test), human approval (`override_requires_human_approval`),
+Excel add-in sign-in, short-lived storage links (Azure Blob SAS) for large files, a proxy mode
+for agents that don't speak MCP, dashboard.

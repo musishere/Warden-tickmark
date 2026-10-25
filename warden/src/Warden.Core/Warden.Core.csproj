@@ -1,2 +1,6 @@
+<!--
+  Warden.Core.csproj: plain C# library holding the domain (tenants, users, ...) and the rules.
+  It has no web or database packages on purpose, so the rules are easy to test on their own.
+-->
 <Project Sdk="Microsoft.NET.Sdk">
 </Project>

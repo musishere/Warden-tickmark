@@ -5,6 +5,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="TICKMARK_", env_file=".env")
 
     warden_url: str = "http://localhost:5000"
+    tools_audience: str = "tickmark-tools"  # the `aud` of the tokens Warden forwards to the tools (api/tools.py)
+    engagements_dir: str = "data/engagements"  # <engagement id>/sample.xlsx + invoices/: what the tools serve
     docint_endpoint: str = ""
     docint_key: str = ""
     docint_model: str = "prebuilt-invoice"  # Azure Document Intelligence model that reads the invoices

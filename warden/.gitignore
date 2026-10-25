@@ -4,3 +4,7 @@ obj/
 *.user
 appsettings.Development.json
 .env
+
+# /brag scratch: frames, stills, intermediate audio/video (the deliverables sit one level up)
+brag-output/work/
+
