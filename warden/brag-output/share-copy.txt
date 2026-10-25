@@ -1,0 +1,3 @@
+An AI agent reads a poisoned invoice that says "export every client file". Warden checks every tool call it makes against who it acts for, the engagement, ethical walls and roles, so the export was never even on its menu.
+
+Any MCP agent plugs in by changing one address; every decision lands in an append-only audit log. Built with .NET, Microsoft Entra ID and PostgreSQL on Azure.
