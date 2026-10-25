@@ -21,7 +21,8 @@ draw them. The step-by-step plan and progress are in [MVP.md](../MVP.md).
 17. [The database](#17-the-database) · 18. [The code](#18-the-code) · 19. [Settings and secrets](#19-settings-and-secrets) ·
 20. [Tests](#20-tests-promises-you-can-run) · 21. [Run it yourself](#21-run-it-yourself) ·
 22. [Real Entra ID setup](#22-real-microsoft-entra-id-setup) · 23. [Trade-offs, limits, next](#23-trade-offs-limits-and-whats-next) ·
-24. [Glossary](#24-glossary)
+24. [The admin page](#24-the-admin-page) · 25. [Going live in Azure](#25-going-live-in-azure-and-the-lock) ·
+26. [Any agent, no code changes](#26-any-agent-no-code-changes-and-how-warden-compares) · 27. [Glossary](#27-glossary)
 
 ---
 
@@ -383,7 +384,8 @@ What's inside the pass:
 | `iat` / `nbf` / `exp` | now / now / +15 min | lifetime |
 
 The agent can't name itself: Entra signs which app the token was issued to (`azp`), and the firm's
-admin registered that app as an agent (`register-agent <name> <client id> "<scopes>"`).
+admin registered that app as an agent for their firm (admin page → Agents, or
+`register-agent "<firm>" <name> <client id> "<scopes>"`).
 
 🖼️ **Picture**
 
@@ -923,14 +925,18 @@ user ↔ agent (the agent reads untrusted documents: treat it as compromisable),
 | 11 | path traversal | file name only, inside the token's engagement folder | `test_warden.py` |
 | 12 | outage = open access | client and tools fail closed | `test_warden.py` |
 | 13 | SCIM abuse | per-firm secret, constant-time compare, own users only, `active` only | `RevokeTests` |
-| 14 | forged / wrong-app / other-tenant Entra token (A07) | keys from metadata, issuer + audience pinned, must be linked | `McpSignInTests` | no token → 401 + where to sign in; signed-in agent works with one Warden-made pass, revoke sticks; wall and unknown agent refused |
-| `EntraTests` |
+| 14 | forged / wrong-app / other-tenant Entra token (A07) | keys from metadata, issuer + audience pinned, must be linked | `EntraTests`, `McpSignInTests` |
 | 15 | cost abuse (LLM10) | *not built*: credit reservation at the gate | — |
-| 16 | agent impersonation | *partial*: pass bound to the user's verified token; agent credentials later | — |
+| 16 | agent impersonation | agent = the token's `azp` (Entra-signed), mapped per firm; never an id it sends | `unknown_agent_is_refused_even_with_a_valid_sign_in` |
+| 17 | an admin's agent acts as admin (prompt injection) | `/admin` needs the role AND `azp` = Warden's own app; an agent's token has the agent's `azp` | `only_a_warden_admin_signed_in_at_the_admin_page_gets_in` |
+| 18 | one firm's admin changes another firm (A01) | firm only from the admin's token; other firms' rows are "not found"; agent registrations per firm | `only_a_firm_admin_can_change_its_own_firm`, `AdminTests` |
+| 19 | XSS on the admin page (A03) | server text only via `textContent`; CSP `script-src 'self'`, no inline script | `the_admin_page_is_public_and_says_where_to_sign_in` |
+| 20 | agent reaches a tool server directly | tool servers have internal ingress only (no public address) + accept only Warden's tokens | `infra/check-lock.sh` (after deploy) |
+| 21 | SSRF via a connected server's address | https only outside Development; *partial*: private addresses not yet refused | — |
 
 Accepted residual risks: dev tokens use a shared HMAC key (Development only); dev signing key is
 regenerated at startup; an in-flight `run_vouch` finishes after revocation; unreadable passes are
-logged to the app log only; audit reads aren't paged.
+logged to the app log only; `GET /audit` isn't paged (the admin's `/admin/audit` is).
 
 🖼️ **Picture**
 
@@ -962,7 +968,10 @@ to is refused, so nothing disappears by accident.
 - `members` and `ethical_walls` keyed on `(engagement_id, user_id)`; `users` unique
   `(tenant_id, email)` and unique `(entra_tenant_id, entra_object_id)`.
 - Migrations: `Initial` → `EthicalWalls` → `DelegatedTokens` → `AuditLog` (+ hand-written
-  triggers) → `UserActive` (hand-edited default `true`, so existing users stay active) → `EntraLink`.
+  triggers) → `UserActive` (hand-edited default `true`, so existing users stay active) → `EntraLink`
+  → … → `FirmWideAuditRows` (`audit_log.engagement_id` optional: admin changes that belong to no
+  engagement) → `AgentsPerFirm` (`agents.tenant_id`, unique `(tenant_id, entra_client_id)`;
+  hand-written UPDATE gives old rows to the first firm).
   Never edit an old migration; add a new one.
 - Postgres 17 in Docker on host port **5433**; tests use database `warden_test`.
 
@@ -1042,7 +1051,7 @@ erDiagram
 |---|---|
 | `tenants` | an audit firm |
 | `users` | a person at a firm (`active = false` once they leave) |
-| `agents` | a registered AI agent, with `allowed_scopes`: the most it may ever be given |
+| `agents` | one firm's registration of an AI agent app (`tenant_id`, `entra_client_id`), with `allowed_scopes`: the most it may ever be given there |
 | `upstream_servers` | one of a firm's own MCP servers behind Warden |
 | `upstream_tools` | "agents may use this tool of that server, with this scope" (no row = hidden) |
 | `engagements` | one client audit, the unit of access |
@@ -1085,9 +1094,13 @@ warden/
 | `GET /audit?engagement=` | sign-in | an engagement's audit trail |
 | `POST /token/revoke` | sign-in | cancel your own pass |
 | `PATCH /scim/v2/Users/{id}` | firm SCIM secret | deactivate / reactivate |
+| `GET /admin/` | none | the admin page (static files, holds no data) |
+| `GET /admin/sign-in` | none | where the page signs in (client id, tenant, scope) |
+| `/admin/firm`, `people`, `engagements` (+ `members`, `walls`), `agents`, `servers` (+ `tools`), `audit` | Entra sign-in at the admin page + `Warden.Admin` role | the firm admin's jobs (§24, `AdminController.cs`) |
 
-CLI (`dotnet run --project src/Warden.Api -- …`): `seed`, `dev-token <name> [agent]`,
-`link-entra <name> <tid> <oid>`, `register-agent <name> <client id> "<scopes>"`,
+CLI (`dotnet run --project src/Warden.Api -- …`; in the container `dotnet Warden.Api.dll …`): `migrate`,
+`seed`, `dev-token <name> [agent]`, `add-firm "<firm>" "<admin>" <email> <tid> <oid>`,
+`link-entra <name> <tid> <oid>`, `register-agent "<firm>" <name> <client id> "<scopes>"`,
 `add-upstream "<firm>" <name> <url> <audience>`, `assign-tool "<firm>" <server> <tool> <scope>`.
 
 | Python world | .NET here |
@@ -1319,15 +1332,27 @@ minutes), tell Warden the two ids, and link your account to a demo user.
    curl -s localhost:5000/me -H "Authorization: Bearer $TOKEN"     # Sara's WARDEN ids
    cd ../tickmark && make agent TOKEN=$TOKEN
    ```
-   (`az` tokens are issued to the Azure CLI's app, so first `register-agent "Azure CLI"
+   (`az` tokens are issued to the Azure CLI's app, so first `register-agent "Firm A" "Azure CLI"
    04b07795-8ddb-461a-bbee-02f9e1bf7b46 "documents.read vouch.run"`, or Warden says `unknown agent`.)
 6. **A real agent over MCP (step 17)**: register the agent as its own app (App registrations → New,
    public client, redirect URI the agent's MCP client uses, e.g. `http://localhost:<port>/callback`;
    API permissions → Warden → `access_as_user`). Then
-   `dotnet run --project src/Warden.Api -- register-agent "<agent>" <its client id> "documents.read vouch.run"`,
+   `dotnet run --project src/Warden.Api -- register-agent "Firm A" "<agent>" <its client id> "documents.read vouch.run"`,
    and point the agent's MCP client at `http://localhost:5000/mcp/engagements/<id>` with that client id
    (Entra has no dynamic client registration, so the client must be told it, e.g. Claude Code's
    `claude mcp add --client-id`; check `claude mcp add --help`). It opens Microsoft's page, you sign in, done.
+
+7. **Firm admins (step 22)**: App registrations → Warden → App roles → Create: display name
+   `Warden Admin`, value `Warden.Admin`, allowed member types Users/Groups. Then Enterprise
+   applications → Warden → Users and groups → Add → the admin person → role Warden Admin
+   (groups need Entra P1; on the free tier assign people one by one). `/admin` lets in only that
+   role AND a token issued to Warden's own app (the admin page): an admin's agent carries the
+   same role in its token, but its `azp` is the agent's app, so it gets 403.
+
+8. **The admin page (step 22g)**: App registrations → Warden → Authentication → Add a platform →
+   **Single-page application**, redirect URIs `http://localhost:5000/admin/` and, once deployed,
+   `https://<warden address>/admin/`. (SPA = Microsoft lets the browser itself redeem the sign-in
+   code; no secret.) Then open `/admin/` and sign in as a person with the Warden Admin role.
 
 | Symptom | Cause |
 |---|---|
@@ -1336,7 +1361,9 @@ minutes), tell Warden the two ids, and link your account to a demo user.
 | 401, `not linked to a Warden user` | step 4 missing |
 | 401, slow first request | Warden can't reach `login.microsoftonline.com` |
 | `AADSTS65001` from `az` | step 2's Azure CLI client application missing |
-| 403 `unknown agent` | the token's app (`azp`) isn't registered: `register-agent` |
+| 403 `unknown agent` | the token's app (`azp`) isn't registered for the user's firm: admin page → Agents |
+| admin page: `AADSTS9002326` / `AADSTS50011` | the page's address isn't a **Single-page application** redirect URI (item 8) |
+| admin page: "Forbidden: you need the Warden Admin role" | item 7: assign the role; sign out and in again |
 
 🖼️ **Picture**
 
@@ -1375,12 +1402,18 @@ Trade-offs accepted:
 - MCP sign-in passes get agent ceiling ∩ role, not a narrower ask: an MCP client can't ask for scopes per engagement
 - one Entra tenant; multi-tenant needs per-firm issuer checks
 - SCIM secrets in config; only `active` is synced (no user create/update, no groups)
-- audit reads unpaged; unreadable passes go to the app log only
+- `GET /audit` unpaged (the admin's `/admin/audit` is paged); unreadable passes go to the app log only
 - upstream MCP servers: one fresh session per request, first page of `tools/list` only, and they must
-  accept Warden's signed token (no per-server API keys yet); connected by CLI, no admin screen
-- no endpoint to manage memberships and walls yet (they come from `DemoSeed`)
+  accept Warden's signed token (no per-server API keys yet); private addresses aren't refused yet (SSRF)
+- admin page: a Microsoft account is typed in as its Object ID (no Graph search); no refresh token,
+  so sign in again after an hour
+- Azure: Postgres reachable from Azure services (TLS + random password), not a private network;
+  0..1 replicas; the lock is internal ingress + Warden-only tokens, not an egress firewall (§25)
 
-Next (MVP.md Phase 9):
+Done since (MVP.md Phases 9–10): 19 stock clients, 22 admin API + page, 23–25 going live, 20 the
+lock, 21 the comparison (§24–26). Left: step 14's portal clicks, and running the deploy.
+
+Was next (MVP.md Phase 9):
 - ~~16~~ done: `/mcp/engagements/{id}`: Warden speaks MCP (`initialize`, `tools/list` filtered per user +
   agent, `tools/call` → the existing gate)
 - ~~17 / 17a~~ done: MCP sign-in (RFC 9728 → Entra), Warden makes the pass per session; agent = token's `azp` (section 11)
@@ -1415,7 +1448,203 @@ flowchart LR
 
 ---
 
-## 24. Glossary
+## 24. The admin page
+
+🗣️ **In plain words**
+
+The firm's own admin runs their part of Warden from a web page, signed in with Microsoft: who
+works on which engagement, who is walled off, which AI agents the firm allows and how far, which of
+the firm's tool servers sit behind Warden and which of their tools agents may use, and the audit
+log. Warden's operator only creates the firm and its first admin (`add-firm`); the rest is theirs.
+An admin's AI agent can never do any of this, even though it acts for an admin.
+
+🔧 **Technically**
+
+- Page: `wwwroot/admin/index.html` + `admin.js`, served by Warden at `/admin/` (public files, no
+  data). Plain JavaScript, no libraries: Microsoft sign-in is OAuth authorization code + PKCE done by
+  hand (`crypto.subtle` for the challenge), straight with Entra (SPA redirect URI, §22 item 8).
+  Token in `sessionStorage`; no refresh token (401 → sign in again).
+- Who gets in (`EntraSignIn.AdminPolicy`): an **Entra** sign-in (dev tokens never), app role
+  `Warden.Admin`, **and** `azp` = Warden's own client id. Entra copies a person's app roles into their
+  agents' tokens too, so the role alone would make an admin's agent an admin; the `azp` check stops it.
+- Which firm: the admin's token's `tid` (their Warden firm), never the URL or body. Another firm's
+  people, engagements, servers, agents: **404**, the same as not existing.
+- Endpoints (`Controllers/AdminController.cs`, full list in its header): people (+ link a Microsoft
+  account), memberships, engagements, walls, agents (per-firm ceiling; `""` = off), servers (connect;
+  list what a server offers, live, with a one-minute Warden-signed token for its audience; assign a
+  scope or hide each tool), audit (firm-wide, newest first, `?before=<id>&limit=` paging).
+- Every change writes an `admin.*` audit row in the same transaction (UserId = the admin; firm-wide
+  changes have no engagement). No change needs a revocation: every call re-decides with today's data.
+- Agents became **per firm** for this (`AgentsPerFirm` migration): one Entra client id (Claude
+  Code's is the same everywhere) can be allowed by Firm A and Firm B with different ceilings, and each
+  admin changes only their own row. Both lookups check the firm: `Delegation.AgentOf` (sign-in →
+  registration) and `Decision.Decide` (refuses another firm's registration).
+- Safety: everything from the server is set as `textContent` (names, reasons and tool names can
+  come from agents and tool servers); CSP `script-src 'self'`, connections only to Warden and
+  `login.microsoftonline.com`.
+
+| Test (`AdminTests.cs`) | Promise |
+|---|---|
+| `only_a_warden_admin_signed_in_at_the_admin_page_gets_in` | role + admin page in; their agent, no role, dev token out |
+| `only_a_firm_admin_can_change_its_own_firm` | add / link / put on / take off, logged; Firm B's: not found |
+| `an_ethical_wall_set_by_the_admin_beats_every_role` | walled Admin refused with the reason; lifted, back in |
+| `an_agent_the_admin_allows_works_for_that_firm_only_up_to_its_ceiling` | ceiling holds; other firm: unknown agent; each lookup layer on its own |
+| `a_connected_servers_tool_stays_hidden_until_the_admin_assigns_it` | hidden → assigned → hidden; Firm B's server not found |
+| `the_admin_audit_log_is_the_whole_firm_newest_first_and_paged` | order, paging, no other firm's rows |
+| `the_admin_page_is_public_and_says_where_to_sign_in` | page + script served, CSP present, data not public |
+
+🖼️ **Picture**
+
+```mermaid
+sequenceDiagram
+    actor Admin
+    participant P as /admin/ page
+    participant E as Microsoft Entra
+    participant W as Warden /admin/...
+    Admin->>P: open
+    P->>W: GET /admin/sign-in (client id, tenant)
+    P->>E: authorize (PKCE) → sign in, MFA
+    E-->>P: code → token (azp = Warden, roles = Warden.Admin)
+    P->>W: GET/PUT /admin/... + token
+    W->>W: role + azp + own firm? → change + audit row
+```
+
+---
+
+## 25. Going live in Azure (and the lock)
+
+🗣️ **In plain words**
+
+One script puts Warden in Azure: its own https address, a managed database, secrets in a vault,
+and the firm's tool servers in the same place but with **no public address at all**, so the only way
+to them is through Warden. That's the lock: agents hold no keys to the tools, and can't even reach
+them. GitHub can run the same script on a button press.
+
+🔧 **Technically**
+
+Files: `infra/main.bicep` (the resources), `infra/deploy.sh` (secrets + deploy),
+`.github/workflows/warden-deploy.yml` (build images → ghcr.io → deploy), `infra/check-lock.sh` (step 20).
+
+| Resource | Free trial | Notes |
+|---|---|---|
+| Container Apps env + `warden` | monthly free grant | public https; init container runs `migrate`; 0..1 replicas |
+| `notes` (demo tool server) | free grant | **internal ingress**: `https://notes.internal.<env domain>/mcp`, no public DNS |
+| PostgreSQL Flexible B1ms | 12 months free | TLS `VerifyFull`, random 32-char password |
+| Key Vault | pennies | signing key, DB password, connection string; read by a managed identity |
+| Log Analytics | 5 GB/month free | container logs |
+| images | ghcr.io, free | make both packages public once (no secrets in them) |
+
+Warden's container gets: `ASPNETCORE_ENVIRONMENT=Production` (dev tokens refused, a real signing key
+required), `ForwardedHeaders_Enabled=true` (step 23), `Entra__TenantId/ClientId`, and the two secrets
+as Key Vault references. `deploy.sh` makes the secrets once and reads them back on every later run,
+so the password and signing key never change by accident.
+
+First deploy, from your laptop (install the Azure CLI first: `brew install azure-cli`):
+
+```bash
+az login                                   # your free-trial account
+cd warden
+docker login ghcr.io                       # GitHub username + a token with write:packages
+docker build -t ghcr.io/<you>/warden:v1 . && docker push ghcr.io/<you>/warden:v1
+docker build -t ghcr.io/<you>/warden-notes:v1 examples/notes-server && docker push ghcr.io/<you>/warden-notes:v1
+# GitHub → your profile → Packages → each one → Package settings → Change visibility → Public
+ENTRA_TENANT_ID=<tenant> ENTRA_CLIENT_ID=<Warden's client id> \
+WARDEN_IMAGE=ghcr.io/<you>/warden:v1 NOTES_IMAGE=ghcr.io/<you>/warden-notes:v1 infra/deploy.sh
+```
+
+Then: add `https://<warden address>/admin/` as an SPA redirect URI (§22 item 8), create the first firm
+and admin inside the running container, and connect the notes server from the admin page:
+
+```bash
+curl https://<warden address>/health      # wakes it (0 replicas when idle)
+az containerapp exec -g warden -n warden --command \
+  'dotnet Warden.Api.dll add-firm "Firm A" "<your name>" <your email> <tenant id> <your object id>'
+# admin page → Tool servers → Connect: notes, https://notes.internal.<env domain>/mcp, firm-a-notes
+#   → Tools… → list_notes, read_note: documents.read; delete_all_notes stays hidden
+# admin page → Engagements → open one; People → put yourself on it; Agents → allow your agent's client id
+infra/check-lock.sh                        # step 20: the tool server is unreachable from outside
+```
+
+The notes server keeps its demo notes under the seeded Coke/Pepsi ids; for a demo with those, run
+`dotnet Warden.Api.dll seed` and `link-entra omar <tid> <oid>` instead of `add-firm`.
+
+Later deploys: GitHub → Actions → **warden-deploy** → Run (one-time setup in the workflow's header).
+
+**The lock (step 20)**, what holds and what doesn't:
+- ✅ tool servers have no public address (internal ingress); from the internet they don't resolve
+- ✅ they accept only Warden's one-minute tokens for their own audience; agents never hold one
+- ✅ agents hold no keys at all: they sign in as the user (Entra) and get only Warden's address
+- ⚠️ anything *inside* the same environment can reach the internal address; it still needs a Warden
+  token. An egress lock for agents hosted in Azure (VNet + NSG allowing only Warden) is the next step.
+
+🖼️ **Picture**
+
+```mermaid
+flowchart LR
+    Agent["any agent<br/>(Claude, VS Code, …)"] -->|"https, Entra sign-in"| W
+    Admin["firm admin"] -->|"/admin/"| W
+    subgraph ACA["Azure Container Apps environment"]
+        W["🛡️ warden<br/>(public)"] -->|"one-minute token"| N["notes MCP server<br/>(internal only)"]
+    end
+    W --> KV[("Key Vault")]
+    W --> PG[("PostgreSQL")]
+    Agent -.->|"❌ no public address"| N
+```
+
+---
+
+## 26. Any agent, no code changes (and how Warden compares)
+
+🗣️ **In plain words**
+
+A firm plugs any AI agent into Warden by changing one setting: the agent's tool server address
+becomes Warden's address for an engagement. The agent signs the user in with Microsoft like it
+would for any protected MCP server, and from then on every tool call goes through Warden's rules.
+Nothing about Warden lives inside the agent.
+
+🔧 **Technically**
+
+What it takes, for a stock MCP client (proven with Claude Code, step 19-1):
+1. The firm's Entra admin registers the agent as an app (public client, its redirect URI), with
+   API permission Warden → `access_as_user`. Entra has no dynamic client registration, so the client
+   is told this client id (`claude mcp add --client-id`, MCP Inspector's Client ID field, VS Code's
+   prompt, claude.ai's custom connector → Advanced → OAuth Client ID).
+2. The firm's Warden admin allows that client id with a ceiling (admin page → Agents).
+3. The agent is pointed at `https://<warden>/mcp/engagements/<id>`. It gets 401 + where to sign in
+   (RFC 9728), signs in through Warden's front door (which drops the `resource` Entra refuses), and
+   Warden makes the pass itself. `tools/list` shows only what this user + agent may use here.
+
+A hosted client (claude.ai) calls from its own cloud, so Warden must be on a public https address
+(§25). Desktop and CLI clients also work against `localhost`.
+
+How Warden compares:
+
+| | Generic MCP gateways (Microsoft MCP Gateway, Traefik Hub, agentgateway, Arcade, …) | Microsoft Entra Agent ID | Warden |
+|---|---|---|---|
+| Who the agent is | the gateway's config or an OAuth client | first-class agent identities in Entra | Entra's signed `azp`, mapped to a per-firm registration |
+| On whose behalf | often the gateway's or a service identity | delegated or autonomous, per Entra policy | always a user: `sub` = user, `act` = agent (RFC 8693 shape) |
+| Rule per call | routing, auth, rate limits; policy via plugins | at sign-in: Conditional Access, consent | every call: walls → firm → membership → role → agent ceiling → tool scope |
+| Domain model | tools and routes | apps, agents, permissions | firms, engagements, roles, **ethical walls** |
+| Evidence | access logs | sign-in logs | append-only, trigger-enforced audit row per decision |
+| Off switch | config change | disable the agent identity | SCIM deactivation revokes all the user's agent passes in one transaction |
+
+Warden doesn't replace those: Entra stays the identity provider (and Agent ID could become how agents
+are registered), and a generic gateway could sit in front. Warden is the layer that knows what an
+engagement, an ethical wall and an audit trail are, and decides every single call by them.
+
+🖼️ **Picture**
+
+```mermaid
+flowchart LR
+    A["any MCP agent"] -->|"1 setting: Warden's address"| W["🛡️ Warden<br/>who? for whom? which engagement?<br/>wall? role? ceiling? tool scope?"]
+    W -->|"allowed: one-minute token"| S1["firm's MCP server A"]
+    W -->|"allowed"| S2["firm's MCP server B"]
+    W -->|"every decision"| L[("audit log")]
+```
+
+---
+
+## 27. Glossary
 
 | Word | Meaning |
 |---|---|

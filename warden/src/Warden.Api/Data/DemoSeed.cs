@@ -40,7 +40,8 @@ public static class DemoSeed
     public static readonly Guid Bilal = Guid.Parse("00000000-0000-0000-0000-000000000004");
     public static readonly Guid Dana = Guid.Parse("00000000-0000-0000-0000-000000000005");
 
-    public static readonly Guid Tickmark = Guid.Parse("a9e00000-0000-0000-0000-000000000001");
+    public static readonly Guid Tickmark = Guid.Parse("a9e00000-0000-0000-0000-000000000001");       // Firm A's registration
+    public static readonly Guid TickmarkFirmB = Guid.Parse("a9e00000-0000-0000-0000-000000000002");  // Firm B's, same app
     // Tickmark's Entra app registration (client id). Made up for the demo: with a real Entra, run
     // `register-agent Tickmark <its real client id> "documents.read vouch.run"`.
     public static readonly Guid TickmarkClientId = Guid.Parse("c1000000-0000-0000-0000-000000000001");
@@ -52,6 +53,8 @@ public static class DemoSeed
             People(db);
         if (!db.UpstreamServers.Any(s => s.Id == TickmarkServer))
             TickmarkTools(db);
+        if (!db.Agents.Any(a => a.Id == TickmarkFirmB))
+            FirmBTickmark(db);
     }
 
     static void People(WardenDbContext db)
@@ -82,7 +85,14 @@ public static class DemoSeed
             new EthicalWall { EngagementId = Pepsi, UserId = Omar, Reason = "Works on Coke 2026" },
             new EthicalWall { EngagementId = Coke, UserId = Bilal, Reason = "Works on Pepsi 2026" },
 
-            new Agent { Id = Tickmark, Name = "Tickmark", AllowedScopes = "documents.read vouch.run", EntraClientId = TickmarkClientId });
+            new Agent { Id = Tickmark, TenantId = FirmA, Name = "Tickmark", AllowedScopes = "documents.read vouch.run", EntraClientId = TickmarkClientId });
+        db.SaveChanges();
+    }
+
+    // Firm B allows the same agent app too: its own registration, its own ceiling (step 22d).
+    static void FirmBTickmark(WardenDbContext db)
+    {
+        db.Add(new Agent { Id = TickmarkFirmB, TenantId = FirmB, Name = "Tickmark", AllowedScopes = "documents.read vouch.run", EntraClientId = TickmarkClientId });
         db.SaveChanges();
     }
 

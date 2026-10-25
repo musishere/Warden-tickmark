@@ -56,16 +56,21 @@ public class WardenFactory : WebApplicationFactory<Program>
     public static readonly RsaSecurityKey FakeEntraKey = new(RSA.Create(2048)) { KeyId = "fake-entra" };
 
     // A token as Entra would issue it for Warden, to an agent's app (azp: Tickmark's unless a test
-    // says otherwise). Tests change the parts they want wrong.
-    public static string EntraToken(Guid oid, Guid? tid = null, string audience = FakeEntraClient, SecurityKey? key = null, Guid? azp = null)
+    // says otherwise; FakeEntraClient = Warden's own admin page), with the app roles Entra assigned.
+    // Tests change the parts they want wrong.
+    public static string EntraToken(Guid oid, Guid? tid = null, string audience = FakeEntraClient, SecurityKey? key = null,
+        string? azp = null, string[]? roles = null)
     {
         var t = tid ?? FakeEntraTenant;
+        var claims = new Dictionary<string, object> { ["oid"] = oid.ToString(), ["tid"] = t.ToString(),
+            ["azp"] = azp ?? DemoSeed.TickmarkClientId.ToString(), ["uti"] = Guid.NewGuid().ToString() };
+        if (roles is not null)
+            claims["roles"] = roles;
         return new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
         {
             Issuer = $"https://login.microsoftonline.com/{t}/v2.0",
             Audience = audience,
-            Claims = new Dictionary<string, object> { ["oid"] = oid.ToString(), ["tid"] = t.ToString(),
-                ["azp"] = (azp ?? DemoSeed.TickmarkClientId).ToString(), ["uti"] = Guid.NewGuid().ToString() },
+            Claims = claims,
             Expires = DateTime.UtcNow.AddHours(1),
             SigningCredentials = new SigningCredentials(key ?? FakeEntraKey, SecurityAlgorithms.RsaSha256),
         });
@@ -181,7 +186,7 @@ public class WardenFactory : WebApplicationFactory<Program>
     // BEHIND the agent's ceiling, e.g. a careless registration that allows documents.export.
     public Guid NewAgent(string allowedScopes) => WithDb(db =>
     {
-        var a = new Agent { Name = "Overreach", AllowedScopes = allowedScopes, EntraClientId = Guid.NewGuid() };
+        var a = new Agent { TenantId = DemoSeed.FirmA, Name = "Overreach", AllowedScopes = allowedScopes, EntraClientId = Guid.NewGuid() };
         db.Agents.Add(a);
         db.SaveChanges();
         return a.Id;

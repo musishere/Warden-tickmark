@@ -151,7 +151,7 @@ public class McpSignInTests : IDisposable
     public async Task unknown_agent_is_refused_even_with_a_valid_sign_in()
     {
         var (_, oid) = warden.NewLinkedCokeStaff();
-        var stranger = WardenFactory.EntraToken(oid, azp: Guid.NewGuid());  // a real sign-in, to an app nobody registered
+        var stranger = WardenFactory.EntraToken(oid, azp: Guid.NewGuid().ToString());  // a real sign-in, to an app nobody registered
 
         var res = await Mcp(stranger, DemoSeed.Coke, "tools/list");
         Assert.Equal(HttpStatusCode.Forbidden, res.StatusCode);

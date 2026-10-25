@@ -107,7 +107,7 @@ public class SecurityGuaranteeTests(WardenFactory warden)
     {
         var read = new HashSet<string> { Permissions.DocumentsRead };
         var saraToAcme = warden.WithDb(db => Decision.Decide(db, DemoSeed.FirmA, DemoSeed.Sara, DemoSeed.Tickmark, DemoSeed.Acme, read));
-        var danaToCoke = warden.WithDb(db => Decision.Decide(db, DemoSeed.FirmB, DemoSeed.Dana, DemoSeed.Tickmark, DemoSeed.Coke, read));
+        var danaToCoke = warden.WithDb(db => Decision.Decide(db, DemoSeed.FirmB, DemoSeed.Dana, DemoSeed.TickmarkFirmB, DemoSeed.Coke, read));
         Assert.Equal(new Decision.Verdict(false, "engagement not found in your firm"), saraToAcme);
         Assert.Equal(new Decision.Verdict(false, "engagement not found in your firm"), danaToCoke);
     }

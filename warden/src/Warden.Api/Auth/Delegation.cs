@@ -6,7 +6,7 @@
  *                          Warden makes the pass itself (ForSession) and the agent never sees it
  *
  * WHICH agent: the sign-in token's `azp` (the Entra app it was issued to), mapped to a row in
- * `agents` by its EntraClientId (step 17a). Never an id the agent sends. No such agent -> refused
+ * `agents` by its EntraClientId, among the user's FIRM's registrations (steps 17a, 22d). Never an id the agent sends. No such agent -> refused
  * ("unknown agent") until the firm's admin runs `register-agent`.
  *
  * Issue: Decision.Decide -> audit row ("token.exchange") -> logbook row, saved together (no audit
@@ -30,8 +30,8 @@ public static class Delegation
 {
     // The Warden agent a sign-in token was issued to, or Guid.Empty (Decide says "unknown agent").
     public static Guid AgentOf(WardenDbContext db, ClaimsPrincipal signIn) =>
-        Guid.TryParse(signIn.FindFirst("azp")?.Value, out var client)
-            ? db.Agents.Where(a => a.EntraClientId == client).Select(a => a.Id).SingleOrDefault()
+        Guid.TryParse(signIn.FindFirst("azp")?.Value, out var client) && Guid.TryParse(signIn.FindFirst("tid")?.Value, out var tenant)
+            ? db.Agents.Where(a => a.EntraClientId == client && a.TenantId == tenant).Select(a => a.Id).SingleOrDefault()
             : Guid.Empty;
 
     public static (Decision.Verdict Verdict, DelegatedToken? Row) Issue(WardenDbContext db, IConfiguration config,

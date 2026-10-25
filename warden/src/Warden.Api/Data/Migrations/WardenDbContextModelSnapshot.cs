@@ -43,12 +43,16 @@ namespace Warden.Api.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("name");
 
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
                     b.HasKey("Id")
                         .HasName("pk_agents");
 
-                    b.HasIndex("EntraClientId")
+                    b.HasIndex("TenantId", "EntraClientId")
                         .IsUnique()
-                        .HasDatabaseName("ix_agents_entra_client_id");
+                        .HasDatabaseName("ix_agents_tenant_id_entra_client_id");
 
                     b.ToTable("agents", (string)null);
                 });
@@ -79,7 +83,7 @@ namespace Warden.Api.Data.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("at");
 
-                    b.Property<Guid>("EngagementId")
+                    b.Property<Guid?>("EngagementId")
                         .HasColumnType("uuid")
                         .HasColumnName("engagement_id");
 
@@ -382,6 +386,16 @@ namespace Warden.Api.Data.Migrations
                         .HasDatabaseName("ix_users_tenant_id_email");
 
                     b.ToTable("users", (string)null);
+                });
+
+            modelBuilder.Entity("Warden.Core.Domain.Agent", b =>
+                {
+                    b.HasOne("Warden.Core.Domain.Tenant", null)
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_agents_tenants_tenant_id");
                 });
 
             modelBuilder.Entity("Warden.Core.Domain.DelegatedToken", b =>

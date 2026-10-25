@@ -11,7 +11,7 @@
  *      AddSingleton<WardenSigningKey> = "one shared key pair for signing agent passes",
  *      AddHttpClient("upstream") = "how to reach the firm's MCP servers behind the gate".
  *   3. Build, then the middleware pipeline: each request passes through
- *      UseAuthentication -> UseAuthorization -> the controller, in that order.
+ *      static files (the admin page) -> UseAuthentication -> UseAuthorization -> the controller.
  *   4. Run: starts the HTTP server and blocks until it stops.
  *
  * Command-line extras (run, do the job, exit):
@@ -19,9 +19,10 @@
  *   dotnet run -- seed             insert the demo data (Data/DemoSeed.cs)
  *   dotnet run -- dev-token sara [tickmark]   print a dev sign-in token for a demo user (issued to that agent)
  *   dotnet run -- link-entra sara <tid> <oid>   let a real Entra account sign in as that user
+ *   dotnet run -- add-firm "<firm>" "<admin name>" <email> <tid> <oid>   a new client firm + its first admin
  *   dotnet run -- add-upstream "Firm A" <name> <mcp url> <audience>   connect a firm's MCP server
  *   dotnet run -- assign-tool "Firm A" <server> <tool> <scope>        let agents use one of its tools
- *   dotnet run -- register-agent <name> <entra client id> "<scopes>"   let an agent (an Entra app) in
+ *   dotnet run -- register-agent "Firm A" <name> <entra client id> "<scopes>"   let an agent (an Entra app) in
  *
  * The last line ("public partial class Program;") lets the test project start
  * this app in memory (WebApplicationFactory<Program>), like FastAPI's TestClient.
@@ -89,7 +90,9 @@ builder.Services.AddAuthorizationBuilder().SetFallbackPolicy(new AuthorizationPo
     .RequireAuthenticatedUser()
     .RequireClaim("oid")
     .RequireClaim("tid")
-    .Build());
+    .Build())
+    // The firm admin's endpoints (/admin, step 22): Warden.Admin role, signed in at the admin page.
+    .AddPolicy(EntraSignIn.AdminPolicy, p => EntraSignIn.Admin(p, builder.Configuration));
 
 var app = builder.Build();
 
@@ -123,6 +126,29 @@ if (args.Length == 4 && args[0] == "link-entra")
     (user.EntraTenantId, user.EntraObjectId) = (Guid.Parse(args[2]), Guid.Parse(args[3]));
     db.SaveChanges();
     Console.WriteLine($"{user.Name} now signs in with Entra account {args[3]} (tenant {args[2]}).");
+    return;
+}
+
+// `dotnet run -- add-firm "Contoso LLP" "Jo Admin" jo@contoso.com <entra tenant id> <entra object id>`:
+// a new client firm and its FIRST admin, linked to their Microsoft account (step 25). Run once per firm
+// by whoever operates Warden; everything after that, the firm's admin does on the admin page
+// (the person also needs the Warden Admin app role in Entra, docs/how-it-works.md §22 item 7).
+if (args.Length == 6 && args[0] == "add-firm")
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<WardenDbContext>();
+    if (db.Tenants.Any(t => t.Name.ToLower() == args[1].ToLower()))
+    {
+        Console.Error.WriteLine($"there is already a firm called {args[1]}");
+        Environment.ExitCode = 1;
+        return;
+    }
+    var firm = new Warden.Core.Domain.Tenant { Name = args[1] };
+    db.Tenants.Add(firm);
+    db.Users.Add(new Warden.Core.Domain.User { TenantId = firm.Id, Name = args[2], Email = args[3].ToLowerInvariant(),
+        EntraTenantId = Guid.Parse(args[4]), EntraObjectId = Guid.Parse(args[5]) });
+    db.SaveChanges();
+    Console.WriteLine($"{firm.Name} added ({firm.Id}); {args[2]} signs in with Microsoft account {args[5]}.");
     return;
 }
 
@@ -170,27 +196,29 @@ if (args.Length == 5 && args[0] == "assign-tool")
     return;
 }
 
-// `dotnet run -- register-agent Tickmark <entra client id> "documents.read vouch.run"`: let an agent
-// in (step 17a). The client id is the agent's Entra app registration; Warden knows the agent by it
-// (the `azp` of its sign-in tokens). The scopes are its ceiling (step 18). Run again to change them.
-if (args.Length == 4 && args[0] == "register-agent")
+// `dotnet run -- register-agent "Firm A" Tickmark <entra client id> "documents.read vouch.run"`: let an
+// agent in for one firm (steps 17a, 22d). The client id is the agent's Entra app registration; Warden
+// knows the agent by it (the `azp` of its sign-in tokens). The scopes are its ceiling at that firm
+// (step 18). Run again to change them. The admin page does the same (AdminController).
+if (args.Length == 5 && args[0] == "register-agent")
 {
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<WardenDbContext>();
-    var unknown = Warden.Core.Permissions.Parse(args[3]).Except(Warden.Core.Permissions.AllScopes).ToList();
+    var tenant = db.Tenants.Single(t => t.Name.ToLower() == args[1].ToLower());
+    var unknown = Warden.Core.Permissions.Parse(args[4]).Except(Warden.Core.Permissions.AllScopes).ToList();
     if (unknown.Count > 0)
     {
         Console.Error.WriteLine($"unknown scope {string.Join(' ', unknown)}; known: {string.Join(' ', Warden.Core.Permissions.AllScopes)}");
         Environment.ExitCode = 1;
         return;
     }
-    var client = Guid.Parse(args[2]);
-    var agent = db.Agents.SingleOrDefault(a => a.Name.ToLower() == args[1].ToLower());
+    var client = Guid.Parse(args[3]);
+    var agent = db.Agents.SingleOrDefault(a => a.TenantId == tenant.Id && a.EntraClientId == client);
     if (agent is null)
-        db.Agents.Add(agent = new Warden.Core.Domain.Agent { Name = args[1] });
-    (agent.EntraClientId, agent.AllowedScopes) = (client, args[3]);
+        db.Agents.Add(agent = new Warden.Core.Domain.Agent { TenantId = tenant.Id, Name = args[2], EntraClientId = client });
+    (agent.Name, agent.AllowedScopes) = (args[2], args[4]);
     db.SaveChanges();
-    Console.WriteLine($"{agent.Name} (Entra app {client}) may now be given: {args[3]}");
+    Console.WriteLine($"{tenant.Name}: {agent.Name} (Entra app {client}) may now be given: {args[4]}");
     return;
 }
 
@@ -201,12 +229,16 @@ if (args.Length is 2 or 3 && args[0] == "dev-token")
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<WardenDbContext>();
     var user = db.Users.Single(u => u.Name.ToLower() == args[1].ToLower());
-    var agent = args.Length == 3 ? db.Agents.Single(a => a.Name.ToLower() == args[2].ToLower()).EntraClientId : null;
+    var agent = args.Length == 3 ? db.Agents.Single(a => a.TenantId == user.TenantId && a.Name.ToLower() == args[2].ToLower()).EntraClientId : null;
     Console.WriteLine(DevIssuer.CreateToken(DevIssuer.SigningKey(app.Configuration),
         user.Id, user.TenantId, user.Name, DateTime.UtcNow.AddHours(1), agent));
     return;
 }
 
+// The admin page's files (wwwroot/admin: index.html, admin.js), public like any web page; its data
+// comes from /admin/... which needs an admin sign-in (step 22g). /admin/ serves index.html.
+app.UseDefaultFiles();
+app.UseStaticFiles();
 app.UseAuthentication();  // read + verify the token, fill in User (the caller's claims)
 app.UseAuthorization();   // apply the policy: no valid token -> 401
 app.MapControllers();

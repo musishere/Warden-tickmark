@@ -23,11 +23,18 @@
  * them in /.well-known/oauth-protected-resource.
  * An Entra account with no linked Warden user -> 401.
  *
+ * Admin page sign-in (step 22): `roles` is kept too: the app roles the firm's Entra admin assigned
+ * this person on Warden's app registration. AdminPolicy lets in only `Warden.Admin` AND a token
+ * issued to Warden's own app (azp = Entra:ClientId, i.e. the admin page). Entra puts the user's
+ * roles into their agents' tokens as well, so without the azp check an admin's agent would be an
+ * admin too; with it, no agent is ever an admin, whoever it acts for.
+ *
  * ponytail: one Entra tenant. Multi-tenant (many firms, each with its own Entra) needs an issuer
  * check per known tenant instead of one fixed Authority.
  */
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Warden.Api.Data;
 
 namespace Warden.Api.Auth;
@@ -36,6 +43,8 @@ public static class EntraSignIn
 {
     public const string Scheme = "Entra";
     public const string McpScope = "access_as_user";  // the scope Warden's app registration exposes (how-it-works §22)
+    public const string AdminRole = "Warden.Admin";   // app role value on Warden's app registration
+    public const string AdminPolicy = "WardenAdmin";  // [Authorize(Policy = EntraSignIn.AdminPolicy)]
 
     public static string AuthorizationServer(IConfiguration config) => $"https://login.microsoftonline.com/{config["Entra:TenantId"]}/v2.0";
 
@@ -72,7 +81,22 @@ public static class EntraSignIn
             claims.Add(new("azp", app));
         if (ctx.Principal.FindFirst("uti")?.Value is { } uti)
             claims.Add(new("uti", uti));
+        claims.AddRange(ctx.Principal.FindAll("roles").Select(r => new Claim("roles", r.Value)));
         ctx.Principal = new ClaimsPrincipal(new ClaimsIdentity(claims, Scheme));
         return Task.CompletedTask;
+    }
+
+    // Who may use /admin: see the header. Entra off -> nobody (fail closed); dev tokens never.
+    public static void Admin(AuthorizationPolicyBuilder p, IConfiguration config)
+    {
+        if (!IsConfigured(config))
+        {
+            p.RequireAssertion(_ => false);
+            return;
+        }
+        p.AddAuthenticationSchemes(Scheme)  // only Entra sign-ins count here, not dev tokens
+            .RequireClaim("oid").RequireClaim("tid")
+            .RequireClaim("roles", AdminRole)
+            .RequireClaim("azp", config["Entra:ClientId"]!);
     }
 }

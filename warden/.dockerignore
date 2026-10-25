@@ -1,0 +1,5 @@
+# Keep local build output out of the image: the Dockerfile builds from source.
+**/bin
+**/obj
+infra
+examples

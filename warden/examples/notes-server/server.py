@@ -16,17 +16,27 @@ Then connect it behind Warden (from src/Warden.Api):
     dotnet run -- assign-tool  "Firm A" notes read_note  documents.read
 delete_all_notes is never assigned, so no agent ever sees it.
 
+In Azure (step 25) it runs as a container with INTERNAL ingress only: no public address, so only
+Warden can reach it (step 20). Settings come from the environment there:
+    WARDEN_URL   Warden's address, for its JWKS        (default http://localhost:5000)
+    AUDIENCE     the aud it accepts                    (default firm-a-notes)
+    PUBLIC_URL   its own MCP address                   (default http://localhost:8100/mcp)
+    HOST, PORT   where to listen                       (default 127.0.0.1, 8100)
+
 Which engagement: ALWAYS the token's `eng` claim, never the arguments.
 ponytail: notes are a hard-coded dict; a real server would keep them in a database.
 """
+import os
+
 import jwt
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.provider import AccessToken
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import MCPServer
 
-WARDEN = "http://localhost:5000"
-AUDIENCE = "firm-a-notes"  # must match add-upstream's last argument
+WARDEN = os.environ.get("WARDEN_URL", "http://localhost:5000")
+AUDIENCE = os.environ.get("AUDIENCE", "firm-a-notes")  # must match add-upstream's last argument
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "http://localhost:8100/mcp")
 COKE, PEPSI = "e0000000-0000-0000-0000-000000000001", "e0000000-0000-0000-0000-000000000002"
 NOTES = {
     COKE: {"kickoff": "Client wants the vouch done by 15 Nov. Contact: J. Smith (AP).",
@@ -52,7 +62,7 @@ class WardenTokens:
 
 
 mcp = MCPServer("firm-notes", token_verifier=WardenTokens(),
-                auth=AuthSettings(issuer_url=WARDEN, resource_server_url="http://localhost:8100/mcp",
+                auth=AuthSettings(issuer_url=WARDEN, resource_server_url=PUBLIC_URL,
                                   validate_token_resource=False))  # False: WardenTokens checks aud itself
 
 
@@ -82,4 +92,4 @@ def delete_all_notes() -> str:
 
 
 if __name__ == "__main__":
-    mcp.run("streamable-http", port=8100)
+    mcp.run("streamable-http", host=os.environ.get("HOST", "127.0.0.1"), port=int(os.environ.get("PORT", "8100")))

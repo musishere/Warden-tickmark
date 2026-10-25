@@ -47,7 +47,7 @@ public static class Decision
         if (agentId is not null)
         {
             var agent = db.Agents.Find(agentId.Value);
-            if (agent is null)
+            if (agent is null || agent.TenantId != tenantId)  // another firm's registration counts for nothing here
                 return Deny("unknown agent");
             var beyond = scopes.Except(Permissions.Parse(agent.AllowedScopes)).ToList();
             if (beyond.Count > 0)

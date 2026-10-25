@@ -77,8 +77,9 @@ public class WardenDbContext(DbContextOptions<WardenDbContext> options) : DbCont
         b.Entity<AuditEntry>().HasIndex(a => new { a.TenantId, a.EngagementId });
 
         // upstream_servers: a firm's own MCP servers (step 18a), one name per firm.
-        // One agent per Entra app registration (step 17a); a sign-in session's passes, found by its token id (step 17).
-        b.Entity<Agent>().HasIndex(a => a.EntraClientId).IsUnique();
+        // One registration per firm per Entra app (steps 17a, 22d); a sign-in session's passes, found by its token id (step 17).
+        b.Entity<Agent>().HasIndex(a => new { a.TenantId, a.EntraClientId }).IsUnique();
+        b.Entity<Agent>().HasOne<Tenant>().WithMany().HasForeignKey(a => a.TenantId).OnDelete(DeleteBehavior.Restrict);
         b.Entity<DelegatedToken>().HasIndex(t => t.SignInId);
 
         b.Entity<UpstreamServer>().HasOne<Tenant>().WithMany().HasForeignKey(u => u.TenantId).OnDelete(DeleteBehavior.Restrict);

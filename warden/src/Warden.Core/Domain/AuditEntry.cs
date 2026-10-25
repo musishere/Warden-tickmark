@@ -23,8 +23,8 @@ public class AuditEntry
     public Guid TenantId { get; set; }       // the caller's firm, from a verified token
     public Guid UserId { get; set; }         // on whose behalf
     public Guid? AgentId { get; set; }       // who acted (null = the user themselves)
-    public Guid EngagementId { get; set; }
-    public required string Action { get; set; }  // "token.exchange" now; tool names from step 9
+    public Guid? EngagementId { get; set; }  // null = firm-wide, e.g. an admin linking a Microsoft account
+    public required string Action { get; set; }  // "token.exchange", tool names, "admin.*" (step 22)
     public string? Scope { get; set; }       // what was asked for
     public bool Allowed { get; set; }
     public required string Reason { get; set; }  // Decision's reason, e.g. "ethical wall: ..."

@@ -105,13 +105,30 @@ learns their tools from them. Tickmark is only the demo agent and demo tool serv
     `read_note`; unassigned `delete_all_notes` hidden + refused; Pepsi walled; direct call 401
 - [ ] 20. The lock: agents hold no keys and can only reach Warden (Azure Container Apps network
   rules); Warden holds the keys to the real systems — `agent_container_cannot_reach_tools_directly`
-- [ ] 21. Write-up in docs/how-it-works.md: "integrating any agent without code changes", how Warden compares with
-  existing MCP gateways and Entra Agent ID
+  — built into `infra/main.bicep` (tool servers: internal ingress only, no public address) + checked by
+  `infra/check-lock.sh`; ticked once it passes against the real deploy. Egress lock for agents hosted
+  in Azure (VNet + NSG) is the next layer (how-it-works §25)
+- [x] 21. Write-up in docs/how-it-works.md: "integrating any agent without code changes", how Warden compares with
+  existing MCP gateways and Entra Agent ID — how-it-works §26
 
-- [ ] 22. Admin API + page: the CLI's jobs (`register-agent`, `add-upstream`, `assign-tool`, walls,
+- [x] 22. Admin API + page: the CLI's jobs (`register-agent`, `add-upstream`, `assign-tool`, walls,
   audit log) as screens for the firm's admin. Signed in with Microsoft; only users with the
   "Warden Admin" app role (assigned in Entra) get in, and only to their own firm. The CLI stays
   as the developer / emergency tool — `only_a_firm_admin_can_change_its_own_firm`
+  - [x] 22a. Admin sign-in: `Warden.Admin` app role AND signed in at Warden's own app (`azp` =
+    Warden's client id), so an admin's agent is never an admin; dev tokens never; `GET /admin/firm` —
+    `only_a_warden_admin_signed_in_at_the_admin_page_gets_in`
+  - [x] 22b. People + memberships (link a Microsoft account, add to an engagement with a role);
+    `audit_log.engagement_id` optional for firm-wide admin rows — `only_a_firm_admin_can_change_its_own_firm`
+  - [x] 22c. Engagements + ethical walls — `an_ethical_wall_set_by_the_admin_beats_every_role`
+  - [x] 22d. Agents (register, allowed scopes); registrations are now PER FIRM (`agents.tenant_id`),
+    checked at sign-in mapping and in Decide; `register-agent` takes the firm first —
+    `an_agent_the_admin_allows_works_for_that_firm_only_up_to_its_ceiling`
+  - [x] 22e. Tool servers + tool scopes (lists what a server offers, live) —
+    `a_connected_servers_tool_stays_hidden_until_the_admin_assigns_it`
+  - [x] 22f. Audit log view (firm-wide, newest first, paged) — `the_admin_audit_log_is_the_whole_firm_newest_first_and_paged`
+  - [x] 22g. The page itself (served by Warden at `/admin/`, Microsoft sign-in with PKCE, no libraries) —
+    `the_admin_page_is_public_and_says_where_to_sign_in`; `add-firm` CLI creates a firm + its first admin
 
 ### Phase 10 — Go live
 Goal: Warden runs in Azure at a public https address, and a stock client (Claude Desktop, VS Code)
@@ -123,7 +140,9 @@ signs in to it like any other MCP server. Order: 23 → 24 → 22 (built locally
 - [x] 24. `dotnet run -- migrate`: apply database migrations, so a deploy can set up the database
   (checked on an empty database: 10 migrations applied, a second run changes nothing)
 - [ ] 25. Deploy: Azure Container Apps + Azure Database for PostgreSQL + Key Vault (signing key,
-  connection string, SCIM secrets), deployed from GitHub Actions
+  connection string), deployed from GitHub Actions — code done and checked locally (`infra/main.bicep`
+  builds + lints clean, both images build, Production config runs: dev tokens 401, https addresses,
+  admin page served); ticked after the first real `infra/deploy.sh` (needs your `az login`, how-it-works §25)
 
 ## Later
 Workspaces, not engagements: rename engagement → workspace in code, data and URLs
