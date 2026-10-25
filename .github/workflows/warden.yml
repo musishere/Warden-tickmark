@@ -28,3 +28,25 @@ jobs:
         with:
           dotnet-version: "10.0.x"
       - run: dotnet test
+
+  # The admin page is committed pre-built (src/Warden.Api/wwwroot/admin), so `dotnet run`, the tests and
+  # the Docker image need no Node. This job rebuilds it from admin-ui/ and fails if the committed build
+  # doesn't match the source: run `npm run build` in warden/admin-ui and commit the result.
+  admin-ui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: warden/admin-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: warden/admin-ui/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: Committed build matches the source
+        run: |
+          git status --porcelain -- ../src/Warden.Api/wwwroot/admin
+          test -z "$(git status --porcelain -- ../src/Warden.Api/wwwroot/admin)"

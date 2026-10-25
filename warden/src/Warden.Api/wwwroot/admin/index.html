@@ -1,61 +1,22 @@
 <!doctype html>
 <!--
-  index.html — Warden's admin page (step 22g), served by Warden itself at /admin/.
-
-  The page is public; everything it shows comes from /admin/... and needs a Microsoft sign-in with
-  the Warden.Admin role (AdminController.cs). All the work is in admin.js. No libraries.
-  The Content-Security-Policy below allows scripts from Warden only (no inline script), and network
-  calls only to Warden and Microsoft's sign-in service.
+  Warden's admin page (step 22g), served by Warden at /admin/. Source: warden/admin-ui (React + shadcn/ui),
+  built into src/Warden.Api/wwwroot/admin with `npm run build`. The page is public; its data comes from
+  /admin/... and needs a Microsoft sign-in with the Warden.Admin role (AdminController.cs).
+  CSP: scripts only from Warden (no inline script); network calls only to Warden and Microsoft sign-in.
 -->
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://login.microsoftonline.com; img-src 'self' data:; base-uri 'none'; form-action 'self' https://login.microsoftonline.com">
-  <title>Warden admin</title>
-  <style>
-    :root { --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --line: #e7e5e4; --card: #fff; --accent: #1d4ed8; --bad: #b91c1c; --good: #15803d; }
-    @media (prefers-color-scheme: dark) { :root { --bg: #1c1917; --fg: #f5f5f4; --muted: #a8a29e; --line: #44403c; --card: #292524; --accent: #93c5fd; --bad: #fca5a5; --good: #86efac; } }
-    * { box-sizing: border-box; }
-    body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 system-ui, sans-serif; }
-    header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); }
-    header h1 { font-size: 17px; margin: 0; }
-    header .who { color: var(--muted); margin-right: auto; }
-    nav { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
-    nav button[aria-current="page"] { background: var(--accent); color: var(--bg); border-color: var(--accent); }
-    main { padding: 16px; max-width: 1100px; }
-    section { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; overflow-x: auto; }
-    h2 { font-size: 15px; margin: 0 0 8px; }
-    table { border-collapse: collapse; width: 100%; }
-    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
-    th { color: var(--muted); font-weight: 500; }
-    form { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
-    label { display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--muted); }
-    input, select, button { font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--fg); }
-    button { cursor: pointer; }
-    button.link { border: 0; background: none; color: var(--accent); padding: 0 4px; }
-    code { font-size: 12px; color: var(--muted); }
-    .no { color: var(--bad); } .yes { color: var(--good); }
-    #status { min-height: 1.4em; color: var(--bad); padding: 0 16px; }
-    .chips label { flex-direction: row; align-items: center; gap: 4px; color: var(--fg); }
-  </style>
-</head>
-<body>
-  <header>
-    <h1>Warden admin</h1>
-    <span class="who" id="who">Signing in…</span>
-    <button id="signout" hidden>Sign out</button>
-  </header>
-  <nav id="tabs" hidden>
-    <button data-tab="people">People</button>
-    <button data-tab="engagements">Engagements &amp; walls</button>
-    <button data-tab="agents">Agents</button>
-    <button data-tab="servers">Tool servers</button>
-    <button data-tab="audit">Audit log</button>
-  </nav>
-  <p id="status" role="status"></p>
-  <main id="view"></main>
-  <script src="admin.js"></script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://login.microsoftonline.com; img-src 'self' data:; base-uri 'none'; form-action 'self' https://login.microsoftonline.com" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <title>Warden admin</title>
+    <script type="module" crossorigin src="./assets/index-DeiJVflF.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-BNc-LN1c.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
 </html>

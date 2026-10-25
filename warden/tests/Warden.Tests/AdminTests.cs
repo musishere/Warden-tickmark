@@ -230,9 +230,11 @@ public class AdminTests(WardenFactory warden)
         var page = await client.GetAsync("/admin/");
         Assert.Equal(HttpStatusCode.OK, page.StatusCode);
         var html = await page.Content.ReadAsStringAsync();
-        Assert.Contains("<script src=\"admin.js\"></script>", html);
         Assert.Contains("script-src 'self'", html);  // no inline scripts may run
-        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/admin/admin.js")).StatusCode);
+        // The app's bundle (admin-ui, built by Vite with a content hash in its name) is served too.
+        var script = System.Text.RegularExpressions.Regex.Match(html, "src=\"\\./(assets/[^\"]+\\.js)\"").Groups[1].Value;
+        Assert.NotEmpty(script);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync($"/admin/{script}")).StatusCode);
 
         var signIn = await client.GetFromJsonAsync<JsonElement>("/admin/sign-in");
         Assert.Equal(WardenFactory.FakeEntraClient, signIn.GetProperty("clientId").GetString());

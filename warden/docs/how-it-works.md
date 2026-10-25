@@ -930,7 +930,7 @@ user ↔ agent (the agent reads untrusted documents: treat it as compromisable),
 | 16 | agent impersonation | agent = the token's `azp` (Entra-signed), mapped per firm; never an id it sends | `unknown_agent_is_refused_even_with_a_valid_sign_in` |
 | 17 | an admin's agent acts as admin (prompt injection) | `/admin` needs the role AND `azp` = Warden's own app; an agent's token has the agent's `azp` | `only_a_warden_admin_signed_in_at_the_admin_page_gets_in` |
 | 18 | one firm's admin changes another firm (A01) | firm only from the admin's token; other firms' rows are "not found"; agent registrations per firm | `only_a_firm_admin_can_change_its_own_firm`, `AdminTests` |
-| 19 | XSS on the admin page (A03) | server text only via `textContent`; CSP `script-src 'self'`, no inline script | `the_admin_page_is_public_and_says_where_to_sign_in` |
+| 19 | XSS on the admin page (A03) | server text rendered as text by React, never HTML; CSP `script-src 'self'`, no inline script | `the_admin_page_is_public_and_says_where_to_sign_in` |
 | 20 | agent reaches a tool server directly | tool servers have internal ingress only (no public address) + accept only Warden's tokens | `infra/check-lock.sh` (after deploy) |
 | 21 | SSRF via a connected server's address | https only outside Development; *partial*: private addresses not yet refused | — |
 
@@ -1460,9 +1460,12 @@ An admin's AI agent can never do any of this, even though it acts for an admin.
 
 🔧 **Technically**
 
-- Page: `wwwroot/admin/index.html` + `admin.js`, served by Warden at `/admin/` (public files, no
-  data). Plain JavaScript, no libraries: Microsoft sign-in is OAuth authorization code + PKCE done by
-  hand (`crypto.subtle` for the challenge), straight with Entra (SPA redirect URI, §22 item 8).
+- Page: a React + TypeScript app with shadcn/ui components (Tailwind), source in `admin-ui/`, built
+  by Vite into `wwwroot/admin/` and served by Warden at `/admin/` (public files, no data). The build
+  output is committed, so `dotnet run`, the tests and the Docker image need no Node; after changing
+  the UI: `cd admin-ui && npm install && npm run build` (`npm run watch` rebuilds on save while
+  Warden runs). Microsoft sign-in is OAuth authorization code + PKCE done by hand (`src/lib/auth.ts`,
+  `crypto.subtle` for the challenge), straight with Entra (SPA redirect URI, §22 item 8).
   Token in `sessionStorage`; no refresh token (401 → sign in again).
 - Who gets in (`EntraSignIn.AdminPolicy`): an **Entra** sign-in (dev tokens never), app role
   `Warden.Admin`, **and** `azp` = Warden's own client id. Entra copies a person's app roles into their
@@ -1479,8 +1482,8 @@ An admin's AI agent can never do any of this, even though it acts for an admin.
   Code's is the same everywhere) can be allowed by Firm A and Firm B with different ceilings, and each
   admin changes only their own row. Both lookups check the firm: `Delegation.AgentOf` (sign-in →
   registration) and `Decision.Decide` (refuses another firm's registration).
-- Safety: everything from the server is set as `textContent` (names, reasons and tool names can
-  come from agents and tool servers); CSP `script-src 'self'`, connections only to Warden and
+- Safety: everything from the server is rendered as text by React, never as HTML (names, reasons
+  and tool names can come from agents and tool servers); CSP `script-src 'self'`, connections only to Warden and
   `login.microsoftonline.com`.
 
 | Test (`AdminTests.cs`) | Promise |

@@ -235,7 +235,7 @@ if (args.Length is 2 or 3 && args[0] == "dev-token")
     return;
 }
 
-// The admin page's files (wwwroot/admin: index.html, admin.js), public like any web page; its data
+// The admin page's files (wwwroot/admin, built from admin-ui/ by Vite), public like any web page; its data
 // comes from /admin/... which needs an admin sign-in (step 22g). /admin/ serves index.html.
 app.UseDefaultFiles();
 app.UseStaticFiles();
