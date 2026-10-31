@@ -20,8 +20,8 @@ draw them. Scope and progress: [MVP.md](MVP.md). The security layer in front of 
 13. [The audit trail](#13-the-audit-trail-postgres) · 14. [Web app and API](#14-web-app-api-and-logs) ·
 15. [Excel add-in](#15-the-excel-add-in) · 16. [Behind Warden](#16-tickmark-behind-warden) ·
 17. [Accuracy](#17-how-we-know-its-accurate) · 18. [Tools](#18-developer-tools) ·
-19. [Run it](#19-run-it-yourself) · 20. [Compared with DataSnipper](#20-compared-with-datasnipper) ·
-21. [Limits](#21-what-it-cant-do-yet) · 22. [Glossary](#22-glossary)
+19. [Run it](#19-run-it-yourself) ·
+20. [Limits](#20-what-it-cant-do-yet) · 21. [Glossary](#21-glossary)
 
 ---
 
@@ -969,59 +969,7 @@ flowchart LR
 
 ---
 
-## 20. Compared with DataSnipper
-
-🗣️ **In plain words**
-
-DataSnipper (from its public knowledge base, October 2026) **finds evidence**: it searches each
-document for the row's values and links them as clickable highlights; the auditor decides
-everything. Tickmark **gives a conclusion**: it reads the invoice, compares, and marks each row,
-with reasons. That's Tickmark's advantage, and why it must be so strict about never giving a wrong ✅.
-
-🔧 **Technically**
-
-| | DataSnipper | Tickmark |
-|---|---|---|
-| Core idea | claim first: is the row's value printed on the page? | page first: what does the invoice say? |
-| Output | a snip per value; the auditor concludes | ✅ / ⚠️ / 👀 / ❓ with reasons and a trail |
-| Strictness | exact by default; fuzzy and tolerances opt-in | ±0.01, normalised vendor, never ✅ on missing evidence |
-| Strength | works on any layout | knows what each number means; explains differences |
-| Weakness | coincidental hits (fine with a human checking each) | must pick the right number (amount due vs total, day/month) |
-
-Worth copying, in order: (1) **search for the claim as a second reader**, counting a hit only on
-the same page and a labelled line; (2) **highlight every field** on the PDF (the `Snip` data already
-exists); (3) matching options per engagement (tolerance, fuzzy vendor opt-in, required field);
-(4) an exception workflow (reviewer decision + note); (5) templates per client (partly done). Not to
-copy: leaving every conclusion to the auditor; no confidence logic; fuzzy matching on by default.
-
-🖼️ **Picture**
-
-```mermaid
-flowchart TB
-    subgraph DS["DataSnipper: claim first"]
-        direction LR
-        d1["row says 220.00"] --> d2["is 220.00 printed?"] --> d3["highlight"]
-    end
-    subgraph TM["Tickmark: page first"]
-        direction LR
-        t1["which number is the total?"] --> t2["total = 220.00"] --> t3["row says 220.00? → verdict"]
-    end
-```
-
-```mermaid
-flowchart LR
-    P["PDF"] --> R["page first"]
-    S["row's claim"] --> Q["claim first"]
-    P --> Q
-    R --> C{"both agree?"}
-    Q --> C
-    C -->|"yes, same page,<br/>labelled line"| OK["✅ with highlights"]
-    C -->|"no"| RV["⚠️ / 👀 with both values"]
-```
-
----
-
-## 21. What it can't do yet
+## 20. What it can't do yet
 
 🗣️ **In plain words**
 
@@ -1054,7 +1002,7 @@ flowchart LR
 
 ---
 
-## 22. Glossary
+## 21. Glossary
 
 | Word | Meaning |
 |---|---|

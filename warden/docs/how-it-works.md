@@ -1516,6 +1516,8 @@ sequenceDiagram
 
 ## 25. Going live in Azure (and the lock)
 
+(The full walkthrough, first-time setup included: [deployment.md](deployment.md).)
+
 🗣️ **In plain words**
 
 One script puts Warden in Azure: its own https address, a managed database, secrets in a vault,
@@ -1574,7 +1576,7 @@ The notes server keeps its demo notes under the seeded Coke/Pepsi ids; for a dem
 Later deploys: GitHub → Actions → **warden-deploy** → Run (one-time setup in the workflow's header).
 
 **The lock (step 20)**, what holds and what doesn't:
-- ✅ tool servers have no public address (internal ingress); from the internet they don't resolve
+- ✅ tool servers have no public address (internal ingress); from the internet the name hits Azure's front door, which answers 404: no route to them
 - ✅ they accept only Warden's one-minute tokens for their own audience; agents never hold one
 - ✅ agents hold no keys at all: they sign in as the user (Entra) and get only Warden's address
 - ⚠️ anything *inside* the same environment can reach the internal address; it still needs a Warden

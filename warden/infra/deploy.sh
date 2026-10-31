@@ -5,7 +5,7 @@
 #   ENTRA_TENANT_ID=... ENTRA_CLIENT_ID=... WARDEN_IMAGE=ghcr.io/<you>/warden:<tag> \
 #   NOTES_IMAGE=ghcr.io/<you>/warden-notes:<tag> infra/deploy.sh
 #
-# Optional: RESOURCE_GROUP (default warden), LOCATION (default westeurope; pick another if the free
+# Optional: RESOURCE_GROUP (default warden), LOCATION (default northeurope; pick another if the free
 # trial says the region is restricted), DEPLOYER_OBJECT_ID + DEPLOYER_TYPE=ServicePrincipal (CI).
 #
 # Secrets are made ONCE and kept in Key Vault; later runs read them back, so the database password and
@@ -14,7 +14,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 RG=${RESOURCE_GROUP:-warden}
-LOCATION=${LOCATION:-westeurope}
+LOCATION=${LOCATION:-northeurope}
 : "${ENTRA_TENANT_ID:?set ENTRA_TENANT_ID}" "${ENTRA_CLIENT_ID:?set ENTRA_CLIENT_ID}"
 : "${WARDEN_IMAGE:?set WARDEN_IMAGE}" "${NOTES_IMAGE:?set NOTES_IMAGE}"
 DEPLOYER_OBJECT_ID=${DEPLOYER_OBJECT_ID:-$(az ad signed-in-user show --query id -o tsv)}

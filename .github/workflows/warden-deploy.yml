@@ -47,7 +47,7 @@ jobs:
           ENTRA_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
           ENTRA_CLIENT_ID: ${{ vars.ENTRA_CLIENT_ID }}
           RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP || 'warden' }}
-          LOCATION: ${{ vars.LOCATION || 'westeurope' }}
+          LOCATION: ${{ vars.LOCATION || 'northeurope' }}
           DEPLOYER_TYPE: ServicePrincipal
         run: |
           export DEPLOYER_OBJECT_ID=$(az ad sp show --id "${{ vars.AZURE_CLIENT_ID }}" --query id -o tsv)

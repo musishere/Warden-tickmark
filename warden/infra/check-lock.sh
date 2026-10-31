@@ -4,7 +4,7 @@
 #   infra/check-lock.sh            (RESOURCE_GROUP defaults to warden; needs `az login`)
 #
 # Passes when: Warden answers on its public address, the notes tool server is set to internal-only
-# ingress, and its address doesn't even resolve from outside Azure. (That it refuses calls without
+# ingress, and from outside Azure its address gets no answer from it (Azure's front door 404s). (That it refuses calls without
 # Warden's token is the server's own check, tested locally: examples/notes-server answers 401.)
 set -uo pipefail
 RG=${RESOURCE_GROUP:-warden}
@@ -19,6 +19,8 @@ check "Warden is public: $warden/health" \
   '[ "$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 "$warden/health")" = 200 ]'
 check "notes ingress is internal only" \
   '[ "$(az containerapp show -g "$RG" -n notes --query properties.configuration.ingress.external -o tsv)" = false ]'
+# The environment's wildcard DNS resolves every name to its shared front door, which answers 404 for
+# an app with no public route; the notes server itself would answer 401 (no token). 000 = no answer.
 check "notes can't be reached from here: $notes" \
-  '! curl -s -o /dev/null --max-time 15 -X POST "$notes"'
+  'case "$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 -X POST "$notes")" in 000|404) true;; *) false;; esac'
 exit $fail
