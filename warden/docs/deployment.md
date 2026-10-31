@@ -195,14 +195,21 @@ Warden's settings in Azure: `Production` (dev tokens refused, real signing key r
 ```bash
 AZ="docker run --rm -it -v $HOME/.azure:/root/.azure mcr.microsoft.com/azure-cli"
 
-# 1. the admin page can sign in at its live address
-$AZ az ad app update --id <client id> --set spa.redirectUris="['http://localhost:5000/admin/','https://<warden address>/admin/']"
+# 1. the admin page can sign in at its live address (`az ad app update --set spa…` fails: no spa
+#    section yet, so write it through Microsoft Graph)
+$AZ bash -c 'OBJ=$(az ad app show --id <client id> --query id -o tsv); az rest --method PATCH \
+  --uri "https://graph.microsoft.com/v1.0/applications/$OBJ" --headers Content-Type=application/json \
+  --body "{\"spa\":{\"redirectUris\":[\"http://localhost:5000/admin/\",\"https://<warden address>/admin/\"]}}"'
 
 # 2. wake Warden, then create your firm and yourself as its first admin
 curl https://<warden address>/health
-$AZ az containerapp exec -g warden -n warden --command \
-  'dotnet Warden.Api.dll add-firm "Firm A" "<your name>" <your email> <tenant id> <your object id>'
+$AZ az containerapp exec -g warden -n warden      # opens a shell inside Warden (needs a real terminal)
+# at the # prompt (typed there, because --command splits "Mustafa Ahmed" at the space):
+dotnet Warden.Api.dll add-firm "Firm A" "<your name>" <your email> <tenant id> <your object id>
 ```
+
+It prints `Firm A added (…)`. A `libgssapi_krb5.so.2` error just above it is harmless: the database
+driver looks for Kerberos, doesn't find it, and uses the password login instead.
 
 3. Open `https://<warden address>/admin/`, sign in, then:
    - **Tool servers → Connect**: `notes`, `https://notes.internal.<env domain>/mcp`, audience `firm-a-notes`
